@@ -14,17 +14,24 @@ import {
   saveFolders,
 } from './workspace-storage';
 import {
+  initializeCloudEncryption,
   isCloudConfigured,
+  isCloudEncryptionUnlocked,
+  lockCloudEncryption,
   pullWorkspace,
+  recoverCloudEncryption,
   restoreCloudSession,
+  setupCloudEncryption,
   signInWithGitHub,
   signOut,
   syncDocument,
   syncFolder,
+  unlockCloudEncryption,
 } from './workspace-cloud';
 import { WorkspaceSidebar } from './workspace-sidebar';
 import type {
   CloudSession,
+  EncryptionState,
   MainBoardPreference,
   WorkspaceDocument,
   WorkspaceFolder,
@@ -53,6 +60,15 @@ export function App() {
   const [session, setSession] = useState<CloudSession | null>(null);
   const [cloudBusy, setCloudBusy] = useState(false);
   const [moveDialog, setMoveDialog] = useState<MoveDialogState>(null);
+  const [encryptionState, setEncryptionState] =
+    useState<EncryptionState>('signed-out');
+  const [cryptoBusy, setCryptoBusy] = useState(false);
+  const [cryptoError, setCryptoError] = useState('');
+  const [syncPassword, setSyncPassword] = useState('');
+  const [syncPasswordConfirm, setSyncPasswordConfirm] = useState('');
+  const [recoveryMode, setRecoveryMode] = useState(false);
+  const [recoveryInput, setRecoveryInput] = useState('');
+  const [recoveryKey, setRecoveryKey] = useState<string | null>(null);
 
   const documentsRef = useRef<WorkspaceDocument[]>([]);
   const foldersRef = useRef<WorkspaceFolder[]>([]);
@@ -113,7 +129,11 @@ export function App() {
 
   const runDocumentSync = useCallback(
     async (documentId: string) => {
-      if (!sessionRef.current || !isCloudConfigured) {
+      if (
+        !sessionRef.current ||
+        !isCloudConfigured ||
+        !isCloudEncryptionUnlocked()
+      ) {
         return;
       }
 
@@ -167,6 +187,7 @@ export function App() {
             syncedRevision: result.revision,
             revision: result.revision,
             syncState: 'pending',
+            needsEncryption: false,
           });
           const timer = setTimeout(() => void runDocumentSync(documentId), 300);
           syncTimers.current.set(documentId, timer);
@@ -178,6 +199,7 @@ export function App() {
           revision: result.revision,
           syncedRevision: result.revision,
           syncState: 'synced',
+          needsEncryption: false,
           remoteConflict: undefined,
         });
       } catch (error) {
@@ -195,7 +217,11 @@ export function App() {
 
   const scheduleDocumentSync = useCallback(
     (documentId: string, delay = 1200) => {
-      if (!sessionRef.current || !isCloudConfigured) {
+      if (
+        !sessionRef.current ||
+        !isCloudConfigured ||
+        !isCloudEncryptionUnlocked()
+      ) {
         return;
       }
 
@@ -212,7 +238,11 @@ export function App() {
 
   const runFolderSync = useCallback(
     async (folderId: string) => {
-      if (!sessionRef.current || !isCloudConfigured) {
+      if (
+        !sessionRef.current ||
+        !isCloudConfigured ||
+        !isCloudEncryptionUnlocked()
+      ) {
         return;
       }
 
@@ -253,6 +283,7 @@ export function App() {
           syncedRevision: result.revision,
           syncState:
             latest.updatedAt === syncing.updatedAt ? 'synced' : 'pending',
+          needsEncryption: false,
         });
 
         if (latest.updatedAt !== syncing.updatedAt) {
@@ -286,7 +317,7 @@ export function App() {
   }, []);
 
   const syncPendingWorkspace = useCallback(async () => {
-    if (!sessionRef.current) {
+    if (!sessionRef.current || !isCloudEncryptionUnlocked()) {
       return;
     }
 
@@ -307,13 +338,27 @@ export function App() {
   }, [folderDepth, runDocumentSync, runFolderSync]);
 
   const reconcileWithCloud = useCallback(async () => {
-    if (!sessionRef.current || !isCloudConfigured) {
+    if (
+      !sessionRef.current ||
+      !isCloudConfigured ||
+      !isCloudEncryptionUnlocked()
+    ) {
       return;
     }
 
     setCloudBusy(true);
     try {
       const remote = await pullWorkspace();
+      const foldersNeedingEncryption = new Set(
+        remote.folders
+          .filter((folder) => folder.needsEncryption)
+          .map((folder) => folder.id),
+      );
+      const documentsNeedingEncryption = new Set(
+        remote.documents
+          .filter((document) => document.needsEncryption)
+          .map((document) => document.id),
+      );
 
       const localFolderMap = new Map<string, WorkspaceFolder>(
         foldersRef.current.map((folder) => [folder.id, folder]),
@@ -386,8 +431,17 @@ export function App() {
         mergedDocuments.set(local.id, local);
       }
 
-      const nextFolders = [...mergedFolders.values()];
-      const nextDocuments = [...mergedDocuments.values()];
+      const nextFolders = [...mergedFolders.values()].map((folder) =>
+        foldersNeedingEncryption.has(folder.id)
+          ? { ...folder, syncState: 'pending' as const, needsEncryption: true }
+          : folder,
+      );
+      const nextDocuments = [...mergedDocuments.values()].map((document) =>
+        documentsNeedingEncryption.has(document.id)
+          ? { ...document, syncState: 'pending' as const, needsEncryption: true }
+          : document,
+      );
+
       foldersRef.current = nextFolders;
       documentsRef.current = nextDocuments;
       setFolders(nextFolders);
@@ -454,14 +508,46 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (loaded && session) {
+    if (!loaded) {
+      return;
+    }
+    if (!session) {
+      lockCloudEncryption();
+      setEncryptionState('signed-out');
+      return;
+    }
+
+    let cancelled = false;
+    setEncryptionState('checking');
+    setCryptoError('');
+    void initializeCloudEncryption(session.user.id)
+      .then((state) => {
+        if (!cancelled) {
+          setEncryptionState(state);
+        }
+      })
+      .catch((error) => {
+        console.error('Drawnix encryption initialization failed', error);
+        if (!cancelled) {
+          setEncryptionState('locked');
+          setCryptoError('无法读取加密设置，请稍后重试');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loaded, session]);
+
+  useEffect(() => {
+    if (loaded && session && encryptionState === 'unlocked') {
       void reconcileWithCloud();
     }
-  }, [loaded, session, reconcileWithCloud]);
+  }, [loaded, session, encryptionState, reconcileWithCloud]);
 
   useEffect(() => {
     const onOnline = () => {
-      if (sessionRef.current) {
+      if (sessionRef.current && isCloudEncryptionUnlocked()) {
         void reconcileWithCloud();
       }
     };
@@ -510,7 +596,7 @@ export function App() {
     }
     const folder = createLocalFolder(parentId, name);
     commitFolders((current) => [...current, folder]);
-    if (sessionRef.current) {
+    if (sessionRef.current && isCloudEncryptionUnlocked()) {
       setTimeout(() => void runFolderSync(folder.id), 50);
     }
   };
@@ -544,7 +630,7 @@ export function App() {
       syncState: 'pending' as const,
     };
     updateFolder(next);
-    if (sessionRef.current) {
+    if (sessionRef.current && isCloudEncryptionUnlocked()) {
       setTimeout(() => void runFolderSync(folder.id), 50);
     }
   };
@@ -601,7 +687,7 @@ export function App() {
       updatedAt: now,
       syncState: 'pending',
     });
-    if (sessionRef.current) {
+    if (sessionRef.current && isCloudEncryptionUnlocked()) {
       setTimeout(() => void runFolderSync(folder.id), 50);
     }
   };
@@ -692,10 +778,77 @@ export function App() {
     scheduleDocumentSync(forceLocal.id, 50);
   };
 
+  const handleSetupEncryption = async () => {
+    if (!session) return;
+    setCryptoError('');
+    if (syncPassword !== syncPasswordConfirm) {
+      setCryptoError('两次输入的同步密码不一致');
+      return;
+    }
+
+    setCryptoBusy(true);
+    try {
+      const key = await setupCloudEncryption(session.user.id, syncPassword);
+      setRecoveryKey(key);
+      setSyncPassword('');
+      setSyncPasswordConfirm('');
+      setEncryptionState('unlocked');
+    } catch (error) {
+      setCryptoError(error instanceof Error ? error.message : '设置加密失败');
+    } finally {
+      setCryptoBusy(false);
+    }
+  };
+
+  const handleUnlockEncryption = async () => {
+    if (!session) return;
+    setCryptoError('');
+    setCryptoBusy(true);
+    try {
+      await unlockCloudEncryption(session.user.id, syncPassword);
+      setSyncPassword('');
+      setEncryptionState('unlocked');
+    } catch (error) {
+      setCryptoError(error instanceof Error ? error.message : '解锁失败');
+    } finally {
+      setCryptoBusy(false);
+    }
+  };
+
+  const handleRecoverEncryption = async () => {
+    if (!session) return;
+    setCryptoError('');
+    if (syncPassword !== syncPasswordConfirm) {
+      setCryptoError('两次输入的新同步密码不一致');
+      return;
+    }
+
+    setCryptoBusy(true);
+    try {
+      await recoverCloudEncryption(
+        session.user.id,
+        recoveryInput,
+        syncPassword,
+      );
+      setRecoveryInput('');
+      setSyncPassword('');
+      setSyncPasswordConfirm('');
+      setRecoveryMode(false);
+      setEncryptionState('unlocked');
+    } catch (error) {
+      setCryptoError(error instanceof Error ? error.message : '恢复失败');
+    } finally {
+      setCryptoBusy(false);
+    }
+  };
+
   const handleSignOut = async () => {
     await signOut();
     sessionRef.current = null;
     setSession(null);
+    setEncryptionState('signed-out');
+    setRecoveryKey(null);
+    setCryptoError('');
   };
 
   if (!loaded) {
@@ -703,6 +856,12 @@ export function App() {
   }
 
   const visibleFolders = folders.filter((folder) => !folder.deletedAt);
+  const showEncryptionDialog = Boolean(
+    session &&
+      (recoveryKey ||
+        encryptionState === 'setup-required' ||
+        encryptionState === 'locked'),
+  );
 
   return (
     <div className={styles.workspace}>
@@ -713,6 +872,7 @@ export function App() {
         session={session}
         cloudConfigured={isCloudConfigured}
         cloudBusy={cloudBusy}
+        encryptionState={encryptionState}
         onSelectDocument={selectDocument}
         onCreateDocument={createDocument}
         onCreateFolder={createFolder}
@@ -803,7 +963,7 @@ export function App() {
           <div className={styles.emptyState}>
             <div>
               <h2>开始你的第一张图</h2>
-              <p>图表会先保存在本地，登录后自动同步到 Supabase。</p>
+              <p>图表会先保存在本地，登录后加密同步到 Supabase。</p>
               <button onClick={() => createDocument(null)}>新建图表</button>
             </div>
           </div>
@@ -838,6 +998,176 @@ export function App() {
                   移动
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {showEncryptionDialog && (
+          <div className={styles.modalBackdrop}>
+            <div className={`${styles.modal} ${styles.cryptoModal}`}>
+              {recoveryKey ? (
+                <>
+                  <h3>保存恢复密钥</h3>
+                  <p className={styles.modalLead}>
+                    云端数据已经开始使用客户端加密。下面的恢复密钥只显示这一次，建议保存到密码管理器。
+                  </p>
+                  <div className={styles.recoveryKey}>{recoveryKey}</div>
+                  <div className={styles.modalActions}>
+                    <button
+                      onClick={() => void navigator.clipboard.writeText(recoveryKey)}
+                    >
+                      复制恢复密钥
+                    </button>
+                    <button
+                      className={styles.primaryButton}
+                      onClick={() => setRecoveryKey(null)}
+                    >
+                      我已保存
+                    </button>
+                  </div>
+                </>
+              ) : encryptionState === 'setup-required' ? (
+                <>
+                  <h3>开启加密云同步</h3>
+                  <p className={styles.modalLead}>
+                    图表内容和名称会在浏览器里使用 AES-256-GCM 加密后再上传。Supabase 只保存密文。
+                  </p>
+                  <label>
+                    同步密码
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      value={syncPassword}
+                      onChange={(event) => setSyncPassword(event.target.value)}
+                      placeholder="至少 8 个字符"
+                    />
+                  </label>
+                  <label>
+                    确认同步密码
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      value={syncPasswordConfirm}
+                      onChange={(event) =>
+                        setSyncPasswordConfirm(event.target.value)
+                      }
+                    />
+                  </label>
+                  <p className={styles.cryptoWarning}>
+                    同步密码不会上传到服务器。忘记密码且没有恢复密钥时，云端数据无法恢复。
+                  </p>
+                  {cryptoError && (
+                    <div className={styles.cryptoError}>{cryptoError}</div>
+                  )}
+                  <div className={styles.modalActions}>
+                    <button
+                      className={styles.primaryButton}
+                      disabled={cryptoBusy}
+                      onClick={() => void handleSetupEncryption()}
+                    >
+                      {cryptoBusy ? '正在设置…' : '开启加密同步'}
+                    </button>
+                  </div>
+                </>
+              ) : !recoveryMode ? (
+                <>
+                  <h3>解锁云同步</h3>
+                  <p className={styles.modalLead}>
+                    这是新设备或本地密钥已经被清除。输入同步密码后，这台设备会记住解密主密钥。
+                  </p>
+                  <label>
+                    同步密码
+                    <input
+                      type="password"
+                      autoComplete="current-password"
+                      value={syncPassword}
+                      onChange={(event) => setSyncPassword(event.target.value)}
+                    />
+                  </label>
+                  {cryptoError && (
+                    <div className={styles.cryptoError}>{cryptoError}</div>
+                  )}
+                  <div className={styles.modalActionsBetween}>
+                    <button
+                      className={styles.linkButton}
+                      onClick={() => {
+                        setCryptoError('');
+                        setRecoveryMode(true);
+                        setSyncPassword('');
+                      }}
+                    >
+                      忘记密码？使用恢复密钥
+                    </button>
+                    <button
+                      className={styles.primaryButton}
+                      disabled={cryptoBusy}
+                      onClick={() => void handleUnlockEncryption()}
+                    >
+                      {cryptoBusy ? '正在解锁…' : '解锁'}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h3>使用恢复密钥</h3>
+                  <p className={styles.modalLead}>
+                    输入恢复密钥，并设置一个新的同步密码。已有图表不会重新加密，只会重新包裹主密钥。
+                  </p>
+                  <label>
+                    恢复密钥
+                    <textarea
+                      rows={3}
+                      value={recoveryInput}
+                      onChange={(event) => setRecoveryInput(event.target.value)}
+                      placeholder="drawnix-recovery-v1..."
+                    />
+                  </label>
+                  <label>
+                    新同步密码
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      value={syncPassword}
+                      onChange={(event) => setSyncPassword(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    确认新同步密码
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      value={syncPasswordConfirm}
+                      onChange={(event) =>
+                        setSyncPasswordConfirm(event.target.value)
+                      }
+                    />
+                  </label>
+                  {cryptoError && (
+                    <div className={styles.cryptoError}>{cryptoError}</div>
+                  )}
+                  <div className={styles.modalActionsBetween}>
+                    <button
+                      className={styles.linkButton}
+                      onClick={() => {
+                        setRecoveryMode(false);
+                        setCryptoError('');
+                        setRecoveryInput('');
+                        setSyncPassword('');
+                        setSyncPasswordConfirm('');
+                      }}
+                    >
+                      返回密码解锁
+                    </button>
+                    <button
+                      className={styles.primaryButton}
+                      disabled={cryptoBusy}
+                      onClick={() => void handleRecoverEncryption()}
+                    >
+                      {cryptoBusy ? '正在恢复…' : '恢复并设置新密码'}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
