@@ -4,10 +4,9 @@ import type {
   WorkspaceFolder,
 } from './workspace-types';
 
-const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(
-  /\/$/,
-  '',
-);
+const supabaseUrl = (
+  import.meta.env.VITE_SUPABASE_URL as string | undefined
+)?.replace(/\/$/, '');
 const supabasePublishableKey = import.meta.env
   .VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
 
@@ -45,10 +44,7 @@ function requireConfiguration() {
       'Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.',
     );
   }
-  return {
-    url: supabaseUrl,
-    key: supabasePublishableKey,
-  };
+  return { url: supabaseUrl, key: supabasePublishableKey };
 }
 
 function decodeJwtPayload(token: string): Record<string, unknown> {
@@ -61,7 +57,9 @@ function decodeJwtPayload(token: string): Record<string, unknown> {
     );
     const json = decodeURIComponent(
       Array.from(atob(padded))
-        .map((char) => `%${char.charCodeAt(0).toString(16).padStart(2, '0')}`)
+        .map((char) =>
+          `%${char.charCodeAt(0).toString(16).padStart(2, '0')}`,
+        )
         .join(''),
     );
     return JSON.parse(json) as Record<string, unknown>;
@@ -106,9 +104,7 @@ function readStoredSession(): CloudSession | null {
 }
 
 export async function restoreCloudSession(): Promise<CloudSession | null> {
-  if (!isCloudConfigured) {
-    return null;
-  }
+  if (!isCloudConfigured) return null;
 
   const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
   const accessToken = hash.get('access_token');
@@ -127,13 +123,8 @@ export async function restoreCloudSession(): Promise<CloudSession | null> {
   }
 
   const stored = readStoredSession();
-  if (!stored) {
-    return null;
-  }
-
-  if (stored.expiresAt > Date.now() + 60_000) {
-    return stored;
-  }
+  if (!stored) return null;
+  if (stored.expiresAt > Date.now() + 60_000) return stored;
 
   try {
     return await refreshCloudSession(stored.refreshToken);
@@ -206,14 +197,8 @@ async function refreshCloudSession(
 
 async function getValidSession(): Promise<CloudSession> {
   const stored = readStoredSession();
-  if (!stored) {
-    throw new Error('Not signed in');
-  }
-
-  if (stored.expiresAt > Date.now() + 60_000) {
-    return stored;
-  }
-
+  if (!stored) throw new Error('Not signed in');
+  if (stored.expiresAt > Date.now() + 60_000) return stored;
   return refreshCloudSession(stored.refreshToken);
 }
 
@@ -240,10 +225,7 @@ async function restRequest<T>(
     );
   }
 
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
+  if (response.status === 204) return undefined as T;
   const text = await response.text();
   return (text ? JSON.parse(text) : undefined) as T;
 }
@@ -274,6 +256,25 @@ const mapDocument = (row: DocumentRow): WorkspaceDocument => ({
   deletedAt: row.deleted_at,
 });
 
+const timeValue = (value: string) => {
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+async function getFolderRow(id: string) {
+  const rows = await restRequest<FolderRow[]>(
+    `folders?select=id,parent_id,name,sort_order,revision,created_at,updated_at,deleted_at&id=eq.${encodeURIComponent(id)}`,
+  );
+  return rows[0];
+}
+
+async function getDocumentRow(id: string) {
+  const rows = await restRequest<DocumentRow[]>(
+    `documents?select=id,folder_id,name,content,revision,created_at,updated_at,deleted_at&id=eq.${encodeURIComponent(id)}`,
+  );
+  return rows[0];
+}
+
 export async function pullWorkspace(): Promise<{
   folders: WorkspaceFolder[];
   documents: WorkspaceDocument[];
@@ -299,15 +300,14 @@ export async function syncFolder(
   | { status: 'synced'; revision: number }
   | { status: 'conflict'; remote: WorkspaceFolder }
 > {
-  const rows = await restRequest<FolderRow[]>(
-    `folders?select=id,parent_id,name,sort_order,revision,created_at,updated_at,deleted_at&id=eq.${encodeURIComponent(folder.id)}`,
-  );
-  const existing = rows[0];
+  let existing = await getFolderRow(folder.id);
 
   if (!existing) {
-    const inserted = await restRequest<FolderRow[]>('folders', {
+    const inserted = await restRequest<FolderRow[]>('folders?on_conflict=id', {
       method: 'POST',
-      headers: { Prefer: 'return=representation' },
+      headers: {
+        Prefer: 'resolution=ignore-duplicates,return=representation',
+      },
       body: JSON.stringify({
         id: folder.id,
         parent_id: folder.parentId,
@@ -319,12 +319,31 @@ export async function syncFolder(
         deleted_at: folder.deletedAt ?? null,
       }),
     });
-    return { status: 'synced', revision: inserted[0].revision };
+
+    if (inserted.length) {
+      return { status: 'synced', revision: inserted[0].revision };
+    }
+
+    existing = await getFolderRow(folder.id);
+    if (!existing) {
+      throw new Error('Folder insert was ignored but remote row is missing');
+    }
   }
 
   const remote = mapFolder(existing);
   if (remote.revision > folder.syncedRevision) {
-    return { status: 'conflict', remote };
+    if (folder.syncedRevision === 0) {
+      const localTime = timeValue(folder.updatedAt);
+      const remoteTime = timeValue(remote.updatedAt);
+      if (localTime === remoteTime) {
+        return { status: 'synced', revision: remote.revision };
+      }
+      if (localTime < remoteTime) {
+        return { status: 'conflict', remote };
+      }
+    } else {
+      return { status: 'conflict', remote };
+    }
   }
 
   const nextRevision = existing.revision + 1;
@@ -345,10 +364,9 @@ export async function syncFolder(
   );
 
   if (!updated.length) {
-    const latest = await restRequest<FolderRow[]>(
-      `folders?select=id,parent_id,name,sort_order,revision,created_at,updated_at,deleted_at&id=eq.${encodeURIComponent(folder.id)}`,
-    );
-    return { status: 'conflict', remote: mapFolder(latest[0]) };
+    const latest = await getFolderRow(folder.id);
+    if (!latest) throw new Error('Folder disappeared while syncing');
+    return { status: 'conflict', remote: mapFolder(latest) };
   }
 
   return { status: 'synced', revision: updated[0].revision };
@@ -360,32 +378,53 @@ export async function syncDocument(
   | { status: 'synced'; revision: number }
   | { status: 'conflict'; remote: WorkspaceDocument }
 > {
-  const rows = await restRequest<DocumentRow[]>(
-    `documents?select=id,folder_id,name,content,revision,created_at,updated_at,deleted_at&id=eq.${encodeURIComponent(document.id)}`,
-  );
-  const existing = rows[0];
+  let existing = await getDocumentRow(document.id);
 
   if (!existing) {
-    const inserted = await restRequest<DocumentRow[]>('documents', {
-      method: 'POST',
-      headers: { Prefer: 'return=representation' },
-      body: JSON.stringify({
-        id: document.id,
-        folder_id: document.folderId,
-        name: document.name,
-        content: document.content,
-        revision: 1,
-        created_at: document.createdAt,
-        updated_at: document.updatedAt,
-        deleted_at: document.deletedAt ?? null,
-      }),
-    });
-    return { status: 'synced', revision: inserted[0].revision };
+    const inserted = await restRequest<DocumentRow[]>(
+      'documents?on_conflict=id',
+      {
+        method: 'POST',
+        headers: {
+          Prefer: 'resolution=ignore-duplicates,return=representation',
+        },
+        body: JSON.stringify({
+          id: document.id,
+          folder_id: document.folderId,
+          name: document.name,
+          content: document.content,
+          revision: 1,
+          created_at: document.createdAt,
+          updated_at: document.updatedAt,
+          deleted_at: document.deletedAt ?? null,
+        }),
+      },
+    );
+
+    if (inserted.length) {
+      return { status: 'synced', revision: inserted[0].revision };
+    }
+
+    existing = await getDocumentRow(document.id);
+    if (!existing) {
+      throw new Error('Document insert was ignored but remote row is missing');
+    }
   }
 
   const remote = mapDocument(existing);
   if (remote.revision > document.syncedRevision) {
-    return { status: 'conflict', remote };
+    if (document.syncedRevision === 0) {
+      const localTime = timeValue(document.updatedAt);
+      const remoteTime = timeValue(remote.updatedAt);
+      if (localTime === remoteTime) {
+        return { status: 'synced', revision: remote.revision };
+      }
+      if (localTime < remoteTime) {
+        return { status: 'conflict', remote };
+      }
+    } else {
+      return { status: 'conflict', remote };
+    }
   }
 
   const nextRevision = existing.revision + 1;
@@ -406,10 +445,9 @@ export async function syncDocument(
   );
 
   if (!updated.length) {
-    const latest = await restRequest<DocumentRow[]>(
-      `documents?select=id,folder_id,name,content,revision,created_at,updated_at,deleted_at&id=eq.${encodeURIComponent(document.id)}`,
-    );
-    return { status: 'conflict', remote: mapDocument(latest[0]) };
+    const latest = await getDocumentRow(document.id);
+    if (!latest) throw new Error('Document disappeared while syncing');
+    return { status: 'conflict', remote: mapDocument(latest) };
   }
 
   return { status: 'synced', revision: updated[0].revision };
