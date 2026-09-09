@@ -24,3 +24,15 @@ describe('i18nInsidePlaitHook', () => {
     expect(t('general.delete')).toBe('Delete');
   });
 });
+
+describe('translate interpolation', () => {
+  it('replaces named placeholders', () => {
+    const board = {};
+    const { t } = i18nInsidePlaitHook(board);
+    setBoardLanguage(board, 'en');
+
+    expect(t('workspace.undoDelete', { name: 'Roadmap' })).toBe(
+      '“Roadmap” was moved to Trash',
+    );
+  });
+});

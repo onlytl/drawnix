@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Drawnix, DrawnixToolState } from '@drawnix/drawnix';
+import {
+  Drawnix,
+  DrawnixToolState,
+  translate,
+  type Translations,
+  type TranslationVars,
+} from '@drawnix/drawnix';
 import localforage from 'localforage';
 import styles from './app.module.scss';
 import {
@@ -31,6 +37,10 @@ import {
 } from './workspace-cloud';
 import { listFolderPaths, WorkspaceSidebar } from './workspace-sidebar';
 import { WorkspaceDialog, WorkspacePasswordInput } from './workspace-dialog';
+import {
+  getDocumentIdFromLocation,
+  setDocumentIdInLocation,
+} from './workspace-location';
 import type {
   AppValue,
   ChromeTheme,
@@ -78,7 +88,34 @@ type PromptState =
       documentId: string;
       folderId: string | null;
     }
+  | {
+      kind: 'purge';
+      target: 'document' | 'folder';
+      id: string;
+      name: string;
+    }
+  | {
+      kind: 'empty-trash';
+    }
   | null;
+
+type UndoState = {
+  target: 'document' | 'folder';
+  id: string;
+  name: string;
+} | null;
+
+const CRYPTO_ERROR_KEYS: Record<string, keyof Translations> = {
+  '同步密码至少需要 8 个字符': 'workspace.crypto.passwordTooShort',
+  '当前账号还没有设置同步加密': 'workspace.crypto.notSetup',
+  '同步密码不正确': 'workspace.crypto.wrongPassword',
+  '恢复密钥不正确': 'workspace.crypto.wrongRecovery',
+  '新的同步密码至少需要 8 个字符': 'workspace.crypto.newPasswordTooShort',
+  '两次输入的同步密码不一致': 'workspace.crypto.passwordMismatch',
+  '两次输入的新同步密码不一致': 'workspace.crypto.passwordMismatch',
+};
+
+const UNDO_MS = 8000;
 
 function readChromeTheme(): ChromeTheme {
   if (typeof window === 'undefined') {
@@ -127,6 +164,9 @@ export function App() {
   const [recoveryCopied, setRecoveryCopied] = useState(false);
   const [expandFolderId, setExpandFolderId] = useState<string | null>(null);
   const [fallbackTheme, setFallbackTheme] = useState<ChromeTheme>(readChromeTheme);
+  const [undo, setUndo] = useState<UndoState>(null);
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const writingLocationRef = useRef(false);
   const passwordFieldId = useId();
   const passwordConfirmId = useId();
   const recoveryFieldId = useId();
@@ -526,6 +566,9 @@ export function App() {
         } else {
           await clearActiveDocumentId();
         }
+        writingLocationRef.current = true;
+        setDocumentIdInLocation(nextId, 'replace');
+        writingLocationRef.current = false;
       }
 
       await syncPendingWorkspace();
@@ -552,8 +595,6 @@ export function App() {
 
       setDocuments(workspace.documents);
       setFolders(workspace.folders);
-      activeDocumentIdRef.current = workspace.activeDocumentId;
-      setActiveDocumentId(workspace.activeDocumentId);
       setSession(cloudSession);
 
       if (storedToolState) {
@@ -562,6 +603,29 @@ export function App() {
       if (storedPreference) {
         setPreference(storedPreference as MainBoardPreference);
       }
+
+      const visibleIds = new Set(
+        workspace.documents
+          .filter((document) => !document.deletedAt)
+          .map((document) => document.id),
+      );
+      const urlId = getDocumentIdFromLocation();
+      const nextId =
+        (urlId && visibleIds.has(urlId) ? urlId : undefined) ??
+        (workspace.activeDocumentId && visibleIds.has(workspace.activeDocumentId)
+          ? workspace.activeDocumentId
+          : [...visibleIds][0]);
+
+      activeDocumentIdRef.current = nextId;
+      setActiveDocumentId(nextId);
+      if (nextId) {
+        await saveActiveDocumentId(nextId);
+      } else {
+        await clearActiveDocumentId();
+      }
+      writingLocationRef.current = true;
+      setDocumentIdInLocation(nextId, 'replace');
+      writingLocationRef.current = false;
 
       setLoaded(true);
     };
@@ -592,7 +656,7 @@ export function App() {
         console.error('Drawnix encryption initialization failed', error);
         if (!cancelled) {
           setEncryptionState('locked');
-          setCryptoError('无法读取加密设置，请稍后重试');
+          setCryptoError(translate(preference.language, 'workspace.crypto.initFailed'));
         }
       });
 
@@ -636,15 +700,60 @@ export function App() {
     });
   };
 
-  const selectDocument = async (id: string) => {
+  const t = useCallback(
+    (key: keyof Translations, vars?: TranslationVars) =>
+      translate(preference.language, key, vars),
+    [preference.language],
+  );
+
+  const cryptoMessage = (error: unknown, fallback: keyof Translations) => {
+    const raw = error instanceof Error ? error.message : '';
+    const mapped = raw ? CRYPTO_ERROR_KEYS[raw] : undefined;
+    return mapped ? t(mapped) : raw || t(fallback);
+  };
+
+  const writeLocation = (id: string | undefined, mode: 'push' | 'replace') => {
+    writingLocationRef.current = true;
+    setDocumentIdInLocation(id, mode);
+    queueMicrotask(() => {
+      writingLocationRef.current = false;
+    });
+  };
+
+  const clearUndo = () => {
+    if (undoTimer.current) {
+      clearTimeout(undoTimer.current);
+      undoTimer.current = null;
+    }
+    setUndo(null);
+  };
+
+  const showUndo = (next: UndoState) => {
+    if (undoTimer.current) {
+      clearTimeout(undoTimer.current);
+    }
+    setUndo(next);
+    undoTimer.current = setTimeout(() => {
+      setUndo(null);
+      undoTimer.current = null;
+    }, UNDO_MS);
+  };
+
+  const selectDocument = async (
+    id: string,
+    options?: { history?: 'push' | 'replace' | 'none' },
+  ) => {
     activeDocumentIdRef.current = id;
     setActiveDocumentId(id);
     await saveActiveDocumentId(id);
+    if (options?.history !== 'none') {
+      writeLocation(id, options?.history ?? 'push');
+    }
   };
 
   const createDocument = (folderId: string | null = null) => {
     const name = uniqueName(
-      '未命名图表',
+      t('workspace.untitledDiagram'),
       documentsRef.current
         .filter((item) => !item.deletedAt)
         .map((item) => item.name),
@@ -657,6 +766,7 @@ export function App() {
       setExpandFolderId(folderId);
     }
     void saveActiveDocumentId(document.id);
+    writeLocation(document.id, 'push');
     scheduleDocumentSync(document.id, 50);
   };
 
@@ -670,7 +780,7 @@ export function App() {
       kind: 'create-folder',
       parentId,
       value: uniqueName(
-        '新建文件夹',
+        t('workspace.defaultFolderName'),
         foldersRef.current
           .filter((item) => !item.deletedAt)
           .map((item) => item.name),
@@ -705,6 +815,7 @@ export function App() {
       syncState: 'pending',
     });
     scheduleDocumentSync(document.id, 50);
+    showUndo({ target: 'document', id: document.id, name: document.name });
 
     if (activeDocumentIdRef.current === document.id) {
       const nextId = documentsRef.current.find(
@@ -717,6 +828,7 @@ export function App() {
       } else {
         await clearActiveDocumentId();
       }
+      writeLocation(nextId, 'replace');
     }
   };
 
@@ -728,9 +840,104 @@ export function App() {
       updatedAt: now,
       syncState: 'pending',
     });
+    showUndo({ target: 'folder', id: folder.id, name: folder.name });
     if (sessionRef.current && isCloudEncryptionUnlocked()) {
       setTimeout(() => void runFolderSync(folder.id), 50);
     }
+  };
+
+  const restoreDocument = (document: WorkspaceDocument) => {
+    const parent = foldersRef.current.find((item) => item.id === document.folderId);
+    const folderId =
+      document.folderId && parent && !parent.deletedAt ? document.folderId : null;
+    updateDocument({
+      ...document,
+      folderId,
+      deletedAt: null,
+      updatedAt: new Date().toISOString(),
+      syncState: 'pending',
+    });
+    scheduleDocumentSync(document.id, 50);
+    if (folderId) {
+      setExpandFolderId(folderId);
+    }
+    void selectDocument(document.id, { history: 'push' });
+    if (undo?.id === document.id) {
+      clearUndo();
+    }
+  };
+
+  const restoreFolder = (folder: WorkspaceFolder) => {
+    updateFolder({
+      ...folder,
+      deletedAt: null,
+      updatedAt: new Date().toISOString(),
+      syncState: 'pending',
+    });
+    if (sessionRef.current && isCloudEncryptionUnlocked()) {
+      setTimeout(() => void runFolderSync(folder.id), 50);
+    }
+    if (undo?.id === folder.id) {
+      clearUndo();
+    }
+  };
+
+  const undoDelete = async () => {
+    if (!undo) {
+      return;
+    }
+    if (undo.target === 'document') {
+      const current = documentsRef.current.find((item) => item.id === undo.id);
+      if (current) {
+        restoreDocument(current);
+      }
+    } else {
+      const current = foldersRef.current.find((item) => item.id === undo.id);
+      if (current) {
+        restoreFolder(current);
+      }
+    }
+    clearUndo();
+  };
+
+  const purgeDocument = async (document: WorkspaceDocument) => {
+    if (
+      sessionRef.current &&
+      isCloudEncryptionUnlocked() &&
+      document.syncState !== 'synced'
+    ) {
+      await runDocumentSync(document.id);
+    }
+    commitDocuments((current) => current.filter((item) => item.id !== document.id));
+    if (undo?.id === document.id) {
+      clearUndo();
+    }
+  };
+
+  const purgeFolder = async (folder: WorkspaceFolder) => {
+    if (
+      sessionRef.current &&
+      isCloudEncryptionUnlocked() &&
+      folder.syncState !== 'synced'
+    ) {
+      await runFolderSync(folder.id);
+    }
+    commitFolders((current) => current.filter((item) => item.id !== folder.id));
+    if (undo?.id === folder.id) {
+      clearUndo();
+    }
+  };
+
+  const emptyTrash = async () => {
+    const deletedDocuments = documentsRef.current.filter((item) => item.deletedAt);
+    const deletedFolders = foldersRef.current.filter((item) => item.deletedAt);
+    for (const document of deletedDocuments) {
+      await purgeDocument(document);
+    }
+    for (const folder of deletedFolders) {
+      await purgeFolder(folder);
+    }
+    clearUndo();
   };
 
   const deleteDocument = (document: WorkspaceDocument) => {
@@ -804,7 +1011,7 @@ export function App() {
     if (prompt.kind === 'rename') {
       const name = prompt.value.trim();
       if (!name) {
-        setDialogError('名称不能为空');
+        setDialogError(t('workspace.nameRequired'));
         return;
       }
       if (prompt.target === 'document') {
@@ -843,7 +1050,7 @@ export function App() {
     if (prompt.kind === 'create-folder') {
       const name = prompt.value.trim();
       if (!name) {
-        setDialogError('名称不能为空');
+        setDialogError(t('workspace.nameRequired'));
         return;
       }
       const folder = createLocalFolder(prompt.parentId, name);
@@ -878,6 +1085,28 @@ export function App() {
       return;
     }
 
+    if (prompt.kind === 'purge') {
+      if (prompt.target === 'document') {
+        const current = documentsRef.current.find((item) => item.id === prompt.id);
+        if (current) {
+          void purgeDocument(current);
+        }
+      } else {
+        const current = foldersRef.current.find((item) => item.id === prompt.id);
+        if (current) {
+          void purgeFolder(current);
+        }
+      }
+      closePrompt();
+      return;
+    }
+
+    if (prompt.kind === 'empty-trash') {
+      void emptyTrash();
+      closePrompt();
+      return;
+    }
+
     closePrompt();
   };
 
@@ -902,7 +1131,7 @@ export function App() {
     if (action === 'copy') {
       const copy = createLocalDocument(
         document.folderId,
-        `${document.name}（本地副本）`,
+        `${document.name}${t('workspace.localCopySuffix')}`,
         document.content,
       );
       const resolvedRemote = {
@@ -940,7 +1169,7 @@ export function App() {
     if (!session) return;
     setCryptoError('');
     if (syncPassword !== syncPasswordConfirm) {
-      setCryptoError('两次输入的同步密码不一致');
+      setCryptoError(t('workspace.crypto.passwordMismatch'));
       return;
     }
 
@@ -953,7 +1182,7 @@ export function App() {
       setSyncPasswordConfirm('');
       setEncryptionState('unlocked');
     } catch (error) {
-      setCryptoError(error instanceof Error ? error.message : '设置加密失败');
+      setCryptoError(cryptoMessage(error, 'workspace.crypto.setupFailed'));
     } finally {
       setCryptoBusy(false);
     }
@@ -968,7 +1197,7 @@ export function App() {
       setSyncPassword('');
       setEncryptionState('unlocked');
     } catch (error) {
-      setCryptoError(error instanceof Error ? error.message : '解锁失败');
+      setCryptoError(cryptoMessage(error, 'workspace.crypto.unlockFailed'));
     } finally {
       setCryptoBusy(false);
     }
@@ -978,7 +1207,7 @@ export function App() {
     if (!session) return;
     setCryptoError('');
     if (syncPassword !== syncPasswordConfirm) {
-      setCryptoError('两次输入的新同步密码不一致');
+      setCryptoError(t('workspace.crypto.passwordMismatch'));
       return;
     }
 
@@ -995,7 +1224,7 @@ export function App() {
       setRecoveryMode(false);
       setEncryptionState('unlocked');
     } catch (error) {
-      setCryptoError(error instanceof Error ? error.message : '恢复失败');
+      setCryptoError(cryptoMessage(error, 'workspace.crypto.recoverFailed'));
     } finally {
       setCryptoBusy(false);
     }
@@ -1031,7 +1260,7 @@ export function App() {
       await navigator.clipboard.writeText(recoveryKey);
       setRecoveryCopied(true);
     } catch {
-      setCryptoError('复制失败，请手动选中恢复密钥');
+      setCryptoError(t('workspace.crypto.copyFailed'));
     }
   };
 
@@ -1077,6 +1306,38 @@ export function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [prompt]);
 
+  useEffect(() => {
+    if (!loaded) {
+      return;
+    }
+
+    const applyFromLocation = () => {
+      if (writingLocationRef.current) {
+        return;
+      }
+      const id = getDocumentIdFromLocation();
+      if (!id || id === activeDocumentIdRef.current) {
+        return;
+      }
+      const exists = documentsRef.current.some(
+        (document) => document.id === id && !document.deletedAt,
+      );
+      if (!exists) {
+        return;
+      }
+      activeDocumentIdRef.current = id;
+      setActiveDocumentId(id);
+      void saveActiveDocumentId(id);
+    };
+
+    window.addEventListener('hashchange', applyFromLocation);
+    window.addEventListener('popstate', applyFromLocation);
+    return () => {
+      window.removeEventListener('hashchange', applyFromLocation);
+      window.removeEventListener('popstate', applyFromLocation);
+    };
+  }, [loaded]);
+
   if (!loaded) {
     return (
       <div className={`${styles.workspace} ${styles[`theme_${readChromeTheme()}`]}`}>
@@ -1099,42 +1360,46 @@ export function App() {
     : fallbackTheme;
 
   const encryptionTitle = recoveryKey
-    ? '保存恢复密钥'
+    ? t('workspace.crypto.saveRecoveryTitle')
     : encryptionState === 'setup-required'
-      ? '开启加密云同步'
+      ? t('workspace.crypto.setupTitle')
       : recoveryMode
-        ? '使用恢复密钥'
-        : '解锁云同步';
+        ? t('workspace.crypto.recoverTitle')
+        : t('workspace.crypto.unlockTitle');
 
   const encryptionDescription = recoveryKey
-    ? '云端数据已经开始使用客户端加密。下面的恢复密钥只显示这一次，建议保存到密码管理器。'
+    ? t('workspace.crypto.saveRecoveryDescription')
     : encryptionState === 'setup-required'
-      ? '图表内容和名称会在浏览器里使用 AES-256-GCM 加密后再上传。Supabase 只保存密文。'
+      ? t('workspace.crypto.setupDescription')
       : recoveryMode
-        ? '输入恢复密钥，并设置一个新的同步密码。已有图表不会重新加密，只会重新包裹主密钥。'
-        : '这是新设备或本地密钥已经被清除。输入同步密码后，这台设备会记住解密主密钥。';
+        ? t('workspace.crypto.recoverDescription')
+        : t('workspace.crypto.unlockDescription');
 
   const promptTitle =
     prompt?.kind === 'rename'
       ? prompt.target === 'document'
-        ? '重命名图表'
-        : '重命名文件夹'
+        ? t('workspace.renameDiagram')
+        : t('workspace.renameFolder')
       : prompt?.kind === 'create-folder'
-        ? '新建文件夹'
+        ? t('workspace.createFolderTitle')
         : prompt?.kind === 'delete'
           ? prompt.target === 'document'
-            ? '删除图表'
-            : '删除文件夹'
+            ? t('workspace.deleteDiagram')
+            : t('workspace.deleteFolder')
           : prompt?.kind === 'folder-not-empty'
-            ? '无法删除文件夹'
+            ? t('workspace.folderNotEmptyTitle')
             : prompt?.kind === 'move'
-              ? '移动图表'
-              : '';
+              ? t('workspace.moveDiagram')
+              : prompt?.kind === 'purge'
+                ? t('workspace.purgeTitle')
+                : prompt?.kind === 'empty-trash'
+                  ? t('workspace.emptyTrashTitle')
+                  : '';
 
   return (
     <div className={`${styles.workspace} ${styles[`theme_${chromeTheme}`]}`}>
       <a className={styles.skipLink} href="#workspace-canvas">
-        跳到画布
+        {t('workspace.skipToCanvas')}
       </a>
       <WorkspaceSidebar
         folders={folders}
@@ -1145,6 +1410,7 @@ export function App() {
         cloudBusy={cloudBusy}
         encryptionState={encryptionState}
         expandFolderId={expandFolderId}
+        t={t}
         onSelectDocument={selectDocument}
         onCreateDocument={createDocument}
         onCreateFolder={createFolder}
@@ -1153,6 +1419,25 @@ export function App() {
         onMoveDocument={openMoveDialog}
         onDeleteDocument={deleteDocument}
         onDeleteFolder={deleteFolder}
+        onRestoreDocument={restoreDocument}
+        onRestoreFolder={restoreFolder}
+        onPurgeDocument={(document) =>
+          openPrompt({
+            kind: 'purge',
+            target: 'document',
+            id: document.id,
+            name: document.name,
+          })
+        }
+        onPurgeFolder={(folder) =>
+          openPrompt({
+            kind: 'purge',
+            target: 'folder',
+            id: folder.id,
+            name: folder.name,
+          })
+        }
+        onEmptyTrash={() => openPrompt({ kind: 'empty-trash' })}
         onSignIn={signInWithGitHub}
         onSignOut={handleSignOut}
         onUnlock={() => setEncryptionDeferred(false)}
@@ -1163,22 +1448,25 @@ export function App() {
           <>
             {activeDocument.syncState === 'conflict' && (
               <div className={styles.conflictBanner}>
-                <strong>检测到云端版本冲突</strong>
-                <span>当前图在另一台设备上有更新。</span>
+                <strong>{t('workspace.conflictTitle')}</strong>
+                <span>{t('workspace.conflictDescription')}</span>
                 <button
+                  type="button"
                   onClick={() => resolveConflict(activeDocument, 'remote')}
                 >
-                  使用云端
+                  {t('workspace.conflictUseCloud')}
                 </button>
                 <button
+                  type="button"
                   onClick={() => resolveConflict(activeDocument, 'local')}
                 >
-                  使用本地
+                  {t('workspace.conflictUseLocal')}
                 </button>
                 <button
+                  type="button"
                   onClick={() => resolveConflict(activeDocument, 'copy')}
                 >
-                  本地另存副本
+                  {t('workspace.conflictKeepCopy')}
                 </button>
               </div>
             )}
@@ -1245,14 +1533,23 @@ export function App() {
         ) : (
           <div className={styles.emptyState}>
             <div>
-              <h2>开始你的第一张图</h2>
-              <p>图表会先保存在本地，登录后加密同步到 Supabase。</p>
+              <h2>{t('workspace.emptyTitle')}</h2>
+              <p>{t('workspace.emptyDescription')}</p>
               <button type="button" onClick={() => createDocument(null)}>
-                新建图表
+                {t('workspace.newDiagram')}
               </button>
             </div>
           </div>
         )}
+
+        {undo ? (
+          <div className={styles.undoToast} role="status">
+            <span>{t('workspace.undoDelete', { name: undo.name })}</span>
+            <button type="button" onClick={() => void undoDelete()}>
+              {t('workspace.undo')}
+            </button>
+          </div>
+        ) : null}
       </main>
 
       <WorkspaceDialog
@@ -1260,16 +1557,20 @@ export function App() {
         title={promptTitle}
         description={
           prompt?.kind === 'delete'
-            ? `删除后可从其他设备同步消失。此操作会把“${prompt.name}”标记为删除。`
+            ? t('workspace.deleteHint', { name: prompt.name })
             : prompt?.kind === 'folder-not-empty'
-              ? `请先移动或删除“${prompt.name}”内的图表和子文件夹。`
+              ? t('workspace.folderNotEmptyHint', { name: prompt.name })
               : prompt?.kind === 'move'
-                ? '选择图表要放入的文件夹。'
+                ? t('workspace.moveHint')
                 : prompt?.kind === 'create-folder'
-                  ? '文件夹用于整理多张图表。'
+                  ? t('workspace.createFolderHint')
                   : prompt?.kind === 'rename'
-                    ? '名称会显示在左侧工作区，并随加密云同步一起保存。'
-                    : undefined
+                    ? t('workspace.renameHint')
+                    : prompt?.kind === 'purge'
+                      ? t('workspace.purgeDescription', { name: prompt.name })
+                      : prompt?.kind === 'empty-trash'
+                        ? t('workspace.emptyTrashDescription')
+                        : undefined
         }
         onClose={closePrompt}
       >
@@ -1281,7 +1582,9 @@ export function App() {
             }}
           >
             <label htmlFor={promptFieldId}>
-              {prompt.kind === 'create-folder' ? '文件夹名称' : '名称'}
+              {prompt.kind === 'create-folder'
+                ? t('workspace.folderNameLabel')
+                : t('workspace.nameLabel')}
               <input
                 id={promptFieldId}
                 value={prompt.value}
@@ -1295,10 +1598,12 @@ export function App() {
             {dialogError ? <div className={styles.fieldError}>{dialogError}</div> : null}
             <div className={styles.modalActions}>
               <button type="button" onClick={closePrompt}>
-                取消
+                {t('workspace.cancel')}
               </button>
               <button type="submit" className={styles.primaryButton}>
-                {prompt.kind === 'create-folder' ? '创建' : '保存'}
+                {prompt.kind === 'create-folder'
+                  ? t('workspace.create')
+                  : t('workspace.save')}
               </button>
             </div>
           </form>
@@ -1312,7 +1617,7 @@ export function App() {
             }}
           >
             <label htmlFor={promptFieldId}>
-              目标文件夹
+              {t('workspace.targetFolder')}
               <select
                 id={promptFieldId}
                 value={prompt.folderId ?? ''}
@@ -1323,7 +1628,7 @@ export function App() {
                   })
                 }
               >
-                <option value="">根目录</option>
+                <option value="">{t('workspace.rootFolder')}</option>
                 {folderOptions.map((folder) => (
                   <option key={folder.id} value={folder.id}>
                     {folder.label}
@@ -1333,10 +1638,10 @@ export function App() {
             </label>
             <div className={styles.modalActions}>
               <button type="button" onClick={closePrompt}>
-                取消
+                {t('workspace.cancel')}
               </button>
               <button type="submit" className={styles.primaryButton}>
-                移动
+                {t('workspace.move')}
               </button>
             </div>
           </form>
@@ -1351,14 +1656,14 @@ export function App() {
           >
             <div className={styles.modalActions}>
               <button type="button" onClick={closePrompt}>
-                取消
+                {t('workspace.cancel')}
               </button>
               <button
                 type="submit"
                 className={styles.dangerButton}
                 data-dialog-initial-focus="true"
               >
-                删除
+                {t('workspace.delete')}
               </button>
             </div>
           </form>
@@ -1372,9 +1677,33 @@ export function App() {
               data-dialog-initial-focus="true"
               onClick={closePrompt}
             >
-              知道了
+              {t('workspace.gotIt')}
             </button>
           </div>
+        ) : null}
+
+        {prompt?.kind === 'purge' || prompt?.kind === 'empty-trash' ? (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitPrompt();
+            }}
+          >
+            <div className={styles.modalActions}>
+              <button type="button" onClick={closePrompt}>
+                {t('workspace.cancel')}
+              </button>
+              <button
+                type="submit"
+                className={styles.dangerButton}
+                data-dialog-initial-focus="true"
+              >
+                {prompt.kind === 'empty-trash'
+                  ? t('workspace.emptyTrashAction')
+                  : t('workspace.purge')}
+              </button>
+            </div>
+          </form>
         ) : null}
       </WorkspaceDialog>
 
@@ -1392,7 +1721,9 @@ export function App() {
             {cryptoError ? <div className={styles.cryptoError}>{cryptoError}</div> : null}
             <div className={styles.modalActions}>
               <button type="button" onClick={() => void copyRecoveryKey()}>
-                {recoveryCopied ? '已复制' : '复制恢复密钥'}
+                {recoveryCopied
+                  ? t('workspace.crypto.copied')
+                  : t('workspace.crypto.copyKey')}
               </button>
               <button
                 type="button"
@@ -1403,7 +1734,7 @@ export function App() {
                   setRecoveryCopied(false);
                 }}
               >
-                我已保存
+                {t('workspace.crypto.savedKey')}
               </button>
             </div>
           </>
@@ -1415,40 +1746,46 @@ export function App() {
             }}
           >
             <label htmlFor={passwordFieldId}>
-              同步密码
+              {t('workspace.crypto.password')}
               <WorkspacePasswordInput
                 id={passwordFieldId}
                 name="drawnix-sync-password"
                 autoComplete="new-password"
-                placeholder="至少 8 个字符"
+                placeholder={t('workspace.crypto.passwordPlaceholder')}
                 value={syncPassword}
                 onChange={setSyncPassword}
+                showLabel={t('workspace.showPassword')}
+                hideLabel={t('workspace.hidePassword')}
               />
             </label>
             <label htmlFor={passwordConfirmId}>
-              确认同步密码
+              {t('workspace.crypto.confirmPassword')}
               <WorkspacePasswordInput
                 id={passwordConfirmId}
                 name="drawnix-sync-password-confirm"
                 autoComplete="new-password"
                 value={syncPasswordConfirm}
                 onChange={setSyncPasswordConfirm}
+                showLabel={t('workspace.showPassword')}
+                hideLabel={t('workspace.hidePassword')}
               />
             </label>
             <p className={styles.cryptoWarning}>
-              同步密码不会上传到服务器。忘记密码且没有恢复密钥时，云端数据无法恢复。
+              {t('workspace.crypto.warning')}
             </p>
             {cryptoError ? <div className={styles.cryptoError}>{cryptoError}</div> : null}
             <div className={styles.modalActionsBetween}>
               <button type="button" className={styles.linkButton} onClick={deferEncryption}>
-                稍后设置，先用本地
+                {t('workspace.crypto.setupLater')}
               </button>
               <button
                 type="submit"
                 className={styles.primaryButton}
                 disabled={cryptoBusy}
               >
-                {cryptoBusy ? '正在设置…' : '开启加密同步'}
+                {cryptoBusy
+                  ? t('workspace.crypto.setupBusy')
+                  : t('workspace.crypto.setupAction')}
               </button>
             </div>
           </form>
@@ -1460,26 +1797,30 @@ export function App() {
             }}
           >
             <label htmlFor={passwordFieldId}>
-              同步密码
+              {t('workspace.crypto.password')}
               <WorkspacePasswordInput
                 id={passwordFieldId}
                 name="drawnix-sync-password"
                 autoComplete="current-password"
                 value={syncPassword}
                 onChange={setSyncPassword}
+                showLabel={t('workspace.showPassword')}
+                hideLabel={t('workspace.hidePassword')}
               />
             </label>
             {cryptoError ? <div className={styles.cryptoError}>{cryptoError}</div> : null}
             <div className={styles.modalActionsBetween}>
               <button type="button" className={styles.linkButton} onClick={deferEncryption}>
-                稍后解锁，先用本地
+                {t('workspace.crypto.unlockLater')}
               </button>
               <button
                 type="submit"
                 className={styles.primaryButton}
                 disabled={cryptoBusy}
               >
-                {cryptoBusy ? '正在解锁…' : '解锁'}
+                {cryptoBusy
+                  ? t('workspace.crypto.unlockBusy')
+                  : t('workspace.crypto.unlockAction')}
               </button>
             </div>
             <div className={styles.modalActions}>
@@ -1492,7 +1833,7 @@ export function App() {
                   setSyncPassword('');
                 }}
               >
-                忘记密码？使用恢复密钥
+                {t('workspace.crypto.forgotPassword')}
               </button>
             </div>
           </form>
@@ -1504,35 +1845,39 @@ export function App() {
             }}
           >
             <label htmlFor={recoveryFieldId}>
-              恢复密钥
+              {t('workspace.crypto.recoveryKey')}
               <textarea
                 id={recoveryFieldId}
                 rows={3}
                 value={recoveryInput}
                 onChange={(event) => setRecoveryInput(event.target.value)}
-                placeholder="drawnix-recovery-v1..."
+                placeholder={t('workspace.crypto.recoveryPlaceholder')}
                 spellCheck={false}
                 autoComplete="off"
               />
             </label>
             <label htmlFor={passwordFieldId}>
-              新同步密码
+              {t('workspace.crypto.newPassword')}
               <WorkspacePasswordInput
                 id={passwordFieldId}
                 name="drawnix-sync-password"
                 autoComplete="new-password"
                 value={syncPassword}
                 onChange={setSyncPassword}
+                showLabel={t('workspace.showPassword')}
+                hideLabel={t('workspace.hidePassword')}
               />
             </label>
             <label htmlFor={passwordConfirmId}>
-              确认新同步密码
+              {t('workspace.crypto.confirmNewPassword')}
               <WorkspacePasswordInput
                 id={passwordConfirmId}
                 name="drawnix-sync-password-confirm"
                 autoComplete="new-password"
                 value={syncPasswordConfirm}
                 onChange={setSyncPasswordConfirm}
+                showLabel={t('workspace.showPassword')}
+                hideLabel={t('workspace.hidePassword')}
               />
             </label>
             {cryptoError ? <div className={styles.cryptoError}>{cryptoError}</div> : null}
@@ -1548,14 +1893,16 @@ export function App() {
                   setSyncPasswordConfirm('');
                 }}
               >
-                返回密码解锁
+                {t('workspace.crypto.backToUnlock')}
               </button>
               <button
                 type="submit"
                 className={styles.primaryButton}
                 disabled={cryptoBusy}
               >
-                {cryptoBusy ? '正在恢复…' : '恢复并设置新密码'}
+                {cryptoBusy
+                  ? t('workspace.crypto.recoverBusy')
+                  : t('workspace.crypto.recoverAction')}
               </button>
             </div>
           </form>

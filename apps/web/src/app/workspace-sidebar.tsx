@@ -7,12 +7,15 @@ import {
   type ReactNode,
 } from 'react';
 import styles from './app.module.scss';
+import type { Translations, TranslationVars } from '@drawnix/drawnix';
 import type {
   CloudSession,
   EncryptionState,
   WorkspaceDocument,
   WorkspaceFolder,
 } from './workspace-types';
+
+type Translate = (key: keyof Translations, vars?: TranslationVars) => string;
 
 type Props = {
   folders: WorkspaceFolder[];
@@ -23,6 +26,7 @@ type Props = {
   cloudBusy: boolean;
   encryptionState: EncryptionState;
   expandFolderId?: string | null;
+  t: Translate;
   onSelectDocument: (id: string) => void;
   onCreateDocument: (folderId?: string | null) => void;
   onCreateFolder: (parentId?: string | null) => void;
@@ -31,6 +35,11 @@ type Props = {
   onMoveDocument: (document: WorkspaceDocument) => void;
   onDeleteDocument: (document: WorkspaceDocument) => void;
   onDeleteFolder: (folder: WorkspaceFolder) => void;
+  onRestoreDocument: (document: WorkspaceDocument) => void;
+  onRestoreFolder: (folder: WorkspaceFolder) => void;
+  onPurgeDocument: (document: WorkspaceDocument) => void;
+  onPurgeFolder: (folder: WorkspaceFolder) => void;
+  onEmptyTrash: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
   onUnlock: () => void;
@@ -49,7 +58,8 @@ type IconName =
   | 'panel-close'
   | 'panel-open'
   | 'search'
-  | 'more';
+  | 'more'
+  | 'restore';
 
 type MenuItem = {
   label: string;
@@ -65,11 +75,14 @@ const DEFAULT_SIDEBAR_WIDTH = 292;
 const MIN_SIDEBAR_WIDTH = 240;
 const MAX_SIDEBAR_WIDTH = 420;
 
-const syncLabel: Record<WorkspaceDocument['syncState'], string> = {
-  pending: '待同步',
-  syncing: '同步中',
-  synced: '已同步',
-  conflict: '冲突',
+const syncLabelKey: Record<
+  WorkspaceDocument['syncState'],
+  keyof Translations
+> = {
+  pending: 'workspace.syncPending',
+  syncing: 'workspace.syncSyncing',
+  synced: 'workspace.syncSynced',
+  conflict: 'workspace.syncConflict',
 };
 
 const syncClassName: Record<WorkspaceDocument['syncState'], string> = {
@@ -123,6 +136,13 @@ function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
           <circle cx="12" cy="6" r="1.5" />
           <circle cx="12" cy="12" r="1.5" />
           <circle cx="12" cy="18" r="1.5" />
+        </svg>
+      );
+    case 'restore':
+      return (
+        <svg {...common}>
+          <path d="M3 12a9 9 0 1 0 3-6.7" />
+          <path d="M3 4v5h5" />
         </svg>
       );
   }
@@ -283,6 +303,7 @@ export function WorkspaceSidebar({
   cloudBusy,
   encryptionState,
   expandFolderId,
+  t,
   onSelectDocument,
   onCreateDocument,
   onCreateFolder,
@@ -291,11 +312,17 @@ export function WorkspaceSidebar({
   onMoveDocument,
   onDeleteDocument,
   onDeleteFolder,
+  onRestoreDocument,
+  onRestoreFolder,
+  onPurgeDocument,
+  onPurgeFolder,
+  onEmptyTrash,
   onSignIn,
   onSignOut,
   onUnlock,
 }: Props) {
   const [query, setQuery] = useState('');
+  const [view, setView] = useState<'tree' | 'trash'>('tree');
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(loadCollapsedFolders);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(loadSidebarCollapsed);
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth);
@@ -444,11 +471,28 @@ export function WorkspaceSidebar({
     });
   };
 
+  const trashedFolders = useMemo(
+    () =>
+      folders
+        .filter((folder) => folder.deletedAt)
+        .sort((left, right) => (right.deletedAt ?? '').localeCompare(left.deletedAt ?? '')),
+    [folders],
+  );
+  const trashedDocuments = useMemo(
+    () =>
+      documents
+        .filter((document) => document.deletedAt)
+        .sort((left, right) => (right.deletedAt ?? '').localeCompare(left.deletedAt ?? '')),
+    [documents],
+  );
+  const trashCount = trashedFolders.length + trashedDocuments.length;
+
   const renderDocument = (document: WorkspaceDocument) => (
     <DocumentRow
       key={document.id}
       document={document}
       active={activeDocumentId === document.id}
+      t={t}
       onSelect={onSelectDocument}
       onRename={onRenameDocument}
       onMove={onMoveDocument}
@@ -469,6 +513,7 @@ export function WorkspaceSidebar({
         childFolders={childFolders}
         childDocuments={childDocuments}
         onToggle={() => toggleFolder(folder.id)}
+        t={t}
         onCreateDocument={onCreateDocument}
         onCreateFolder={onCreateFolder}
         onRename={onRenameFolder}
@@ -482,12 +527,12 @@ export function WorkspaceSidebar({
   const rootFolders = filtered.folders.filter((folder) => folder.parentId === null);
   const rootDocuments = filtered.documents.filter((document) => document.folderId === null);
   const statusTitle = !session
-    ? '尚未登录云同步'
+    ? t('workspace.notSignedIn')
     : encryptionState === 'checking'
-      ? '正在检查加密状态'
+      ? t('workspace.cloudChecking')
       : encryptionUnlocked
-        ? '端到端加密云同步已开启'
-        : '云同步待解锁';
+        ? t('workspace.cloudEnabled')
+        : t('workspace.cloudLocked');
 
   return (
     <>
@@ -509,8 +554,8 @@ export function WorkspaceSidebar({
             <button
               type="button"
               className={styles.brandMark}
-              title="展开侧边栏"
-              aria-label="展开侧边栏"
+              title={t('workspace.expandSidebar')}
+              aria-label={t('workspace.expandSidebar')}
               onClick={() => setSidebarCollapsed(false)}
             >
               D
@@ -519,13 +564,13 @@ export function WorkspaceSidebar({
             <>
               <div className={styles.brandText}>
                 <strong>Drawnix</strong>
-                <span>Workspace</span>
+                <span>{t('workspace.brandSubtitle')}</span>
               </div>
               <button
                 type="button"
                 className={styles.panelButton}
-                title="收起侧边栏"
-                aria-label="收起侧边栏"
+                title={t('workspace.collapseSidebar')}
+                aria-label={t('workspace.collapseSidebar')}
                 aria-expanded="true"
                 onClick={() => setSidebarCollapsed(true)}
               >
@@ -537,55 +582,149 @@ export function WorkspaceSidebar({
 
         {sidebarCollapsed ? (
           <div className={styles.collapsedActions}>
-            <button type="button" title="新建图表" aria-label="新建图表" onClick={() => onCreateDocument(null)}>
+            <button type="button" title={t('workspace.newDiagram')} aria-label={t('workspace.newDiagram')} onClick={() => onCreateDocument(null)}>
               <Icon name="diagram-plus" />
             </button>
-            <button type="button" title="新建文件夹" aria-label="新建文件夹" onClick={() => onCreateFolder(null)}>
+            <button type="button" title={t('workspace.newFolder')} aria-label={t('workspace.newFolder')} onClick={() => onCreateFolder(null)}>
               <Icon name="folder-plus" />
             </button>
-            <button type="button" title="展开侧边栏" aria-label="展开侧边栏" onClick={() => setSidebarCollapsed(false)}>
+            <button
+              type="button"
+              title={t('workspace.openTrash')}
+              aria-label={t('workspace.openTrash')}
+              onClick={() => {
+                setView('trash');
+                setSidebarCollapsed(false);
+              }}
+            >
+              <Icon name="trash" />
+            </button>
+            <button type="button" title={t('workspace.expandSidebar')} aria-label={t('workspace.expandSidebar')} onClick={() => setSidebarCollapsed(false)}>
               <Icon name="panel-open" />
             </button>
           </div>
         ) : (
           <>
             <div className={styles.primaryActions}>
-              <button type="button" onClick={() => onCreateDocument(null)}>
+              <button type="button" onClick={() => { setView('tree'); onCreateDocument(null); }}>
                 <Icon name="diagram-plus" />
-                <span>新建图表</span>
+                <span>{t('workspace.newDiagram')}</span>
               </button>
-              <button type="button" onClick={() => onCreateFolder(null)}>
+              <button type="button" onClick={() => { setView('tree'); onCreateFolder(null); }}>
                 <Icon name="folder-plus" />
-                <span>新建文件夹</span>
+                <span>{t('workspace.newFolder')}</span>
               </button>
             </div>
-            <div className={styles.search}>
-              <span className={styles.searchIcon}>
-                <Icon name="search" size={14} />
-              </span>
-              <input
-                type="search"
-                value={query}
-                placeholder="搜索图表或文件夹"
-                aria-label="搜索图表或文件夹"
-                onChange={(event) => setQuery(event.target.value)}
-              />
-            </div>
-            <div className={styles.treeHeader}>
-              <span>我的图表</span>
-              <span className={styles.treeCount}>{filtered.documents.length}</span>
-            </div>
-            <div className={styles.tree} role="tree">
-              {rootFolders.map(renderFolder)}
-              {rootDocuments.map(renderDocument)}
-              {filtered.folders.length === 0 && filtered.documents.length === 0 && (
-                <div className={styles.emptyTree}>
-                  {normalizedQuery
-                    ? '没有匹配的图表或文件夹'
-                    : '暂无图表，点击上方按钮开始创建'}
+            {view === 'tree' ? (
+              <>
+                <div className={styles.search}>
+                  <span className={styles.searchIcon}>
+                    <Icon name="search" size={14} />
+                  </span>
+                  <input
+                    type="search"
+                    value={query}
+                    placeholder={t('workspace.searchPlaceholder')}
+                    aria-label={t('workspace.searchPlaceholder')}
+                    onChange={(event) => setQuery(event.target.value)}
+                  />
                 </div>
-              )}
-            </div>
+                <div className={styles.treeHeader}>
+                  <span>{t('workspace.myDiagrams')}</span>
+                  <div className={styles.treeHeaderActions}>
+                    <span className={styles.treeCount}>{filtered.documents.length}</span>
+                    <button
+                      type="button"
+                      className={styles.headerIconButton}
+                      title={t('workspace.openTrash')}
+                      aria-label={t('workspace.openTrash')}
+                      onClick={() => setView('trash')}
+                    >
+                      <Icon name="trash" size={14} />
+                      {trashCount > 0 ? <span className={styles.trashBadge}>{trashCount}</span> : null}
+                    </button>
+                  </div>
+                </div>
+                <div className={styles.tree} role="tree">
+                  {rootFolders.map(renderFolder)}
+                  {rootDocuments.map(renderDocument)}
+                  {filtered.folders.length === 0 && filtered.documents.length === 0 && (
+                    <div className={styles.emptyTree}>
+                      {normalizedQuery ? t('workspace.emptySearch') : t('workspace.emptyTree')}
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className={styles.treeHeader}>
+                  <span>{t('workspace.trash')}</span>
+                  <div className={styles.treeHeaderActions}>
+                    <span className={styles.treeCount}>{trashCount}</span>
+                    <button
+                      type="button"
+                      className={styles.headerTextButton}
+                      onClick={() => setView('tree')}
+                    >
+                      {t('workspace.backToTree')}
+                    </button>
+                  </div>
+                </div>
+                <div className={styles.tree}>
+                  {trashedFolders.map((folder) => (
+                    <div key={folder.id} className={styles.trashRow}>
+                      <span className={styles.folderIcon}><Icon name="folder" /></span>
+                      <span className={styles.itemName} title={folder.name}>{folder.name}</span>
+                      <div className={styles.rowActionsVisible}>
+                        <button
+                          type="button"
+                          title={t('workspace.restore')}
+                          aria-label={t('workspace.restore')}
+                          onClick={() => {
+                            onRestoreFolder(folder);
+                            setView('tree');
+                          }}
+                        >
+                          <Icon name="restore" size={14} />
+                        </button>
+                        <button type="button" title={t('workspace.deleteForever')} aria-label={t('workspace.deleteForever')} onClick={() => onPurgeFolder(folder)}>
+                          <Icon name="trash" size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {trashedDocuments.map((document) => (
+                    <div key={document.id} className={styles.trashRow}>
+                      <span className={styles.diagramIcon}><Icon name="diagram" /></span>
+                      <span className={styles.itemName} title={document.name}>{document.name}</span>
+                      <div className={styles.rowActionsVisible}>
+                        <button
+                          type="button"
+                          title={t('workspace.restore')}
+                          aria-label={t('workspace.restore')}
+                          onClick={() => {
+                            onRestoreDocument(document);
+                            setView('tree');
+                          }}
+                        >
+                          <Icon name="restore" size={14} />
+                        </button>
+                        <button type="button" title={t('workspace.deleteForever')} aria-label={t('workspace.deleteForever')} onClick={() => onPurgeDocument(document)}>
+                          <Icon name="trash" size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {trashCount === 0 ? (
+                    <div className={styles.emptyTree}>{t('workspace.emptyTrash')}</div>
+                  ) : (
+                    <button type="button" className={styles.emptyTrashButton} onClick={onEmptyTrash}>
+                      {t('workspace.emptyTrashAction')}
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
           </>
         )}
 
@@ -597,8 +736,8 @@ export function WorkspaceSidebar({
             />
           ) : !cloudConfigured ? (
             <>
-              <strong>仅本地保存</strong>
-              <span>配置 Supabase 后可自动同步</span>
+              <strong>{t('workspace.localOnlyTitle')}</strong>
+              <span>{t('workspace.localOnlyHint')}</span>
             </>
           ) : session ? (
             <>
@@ -607,33 +746,35 @@ export function WorkspaceSidebar({
                 <div>
                   <strong>
                     {encryptionState === 'checking'
-                      ? '检查加密状态…'
+                      ? t('workspace.cloudChecking')
                       : encryptionUnlocked
                         ? cloudBusy
-                          ? '正在加密同步…'
-                          : '加密云同步已开启'
+                          ? t('workspace.cloudSyncing')
+                          : t('workspace.cloudEnabled')
                         : encryptionState === 'setup-required'
-                          ? '尚未开启加密同步'
-                          : '云同步待解锁'}
+                          ? t('workspace.cloudSetupRequired')
+                          : t('workspace.cloudLocked')}
                   </strong>
                   <span>{session.user.email ?? session.user.id}</span>
                 </div>
               </div>
               {(encryptionState === 'locked' || encryptionState === 'setup-required') && (
                 <button type="button" className={styles.loginButton} onClick={onUnlock}>
-                  {encryptionState === 'setup-required' ? '开启加密同步' : '解锁云同步'}
+                  {encryptionState === 'setup-required'
+                    ? t('workspace.setupEncryption')
+                    : t('workspace.unlockCloud')}
                 </button>
               )}
               <button type="button" className={styles.subtleButton} onClick={onSignOut}>
-                退出登录
+                {t('workspace.signOut')}
               </button>
             </>
           ) : (
             <>
-              <strong>加密云同步</strong>
-              <span>登录后，图表会在浏览器加密再上传</span>
+              <strong>{t('workspace.cloudSignedOutTitle')}</strong>
+              <span>{t('workspace.cloudSignedOutHint')}</span>
               <button type="button" className={styles.loginButton} onClick={onSignIn}>
-                使用 GitHub 登录
+                {t('workspace.signInGitHub')}
               </button>
             </>
           )}
@@ -642,10 +783,10 @@ export function WorkspaceSidebar({
         {!sidebarCollapsed && (
           <div
             className={styles.resizeHandle}
-            title="拖动调整侧边栏宽度"
+            title={t('workspace.resizeSidebar')}
             role="separator"
             aria-orientation="vertical"
-            aria-label="拖动调整侧边栏宽度"
+            aria-label={t('workspace.resizeSidebar')}
             onPointerDown={(event) => {
               event.preventDefault();
               resizingRef.current = true;
@@ -662,6 +803,7 @@ export function WorkspaceSidebar({
 function DocumentRow({
   document,
   active,
+  t,
   onSelect,
   onRename,
   onMove,
@@ -669,6 +811,7 @@ function DocumentRow({
 }: {
   document: WorkspaceDocument;
   active: boolean;
+  t: Translate;
   onSelect: (id: string) => void;
   onRename: (document: WorkspaceDocument) => void;
   onMove: (document: WorkspaceDocument) => void;
@@ -676,10 +819,11 @@ function DocumentRow({
 }) {
   const menu = useFloatingMenu();
   const items: MenuItem[] = [
-    { label: '移动到…', icon: 'move', onSelect: () => onMove(document) },
-    { label: '重命名', icon: 'edit', onSelect: () => onRename(document) },
-    { label: '删除', icon: 'trash', danger: true, onSelect: () => onDelete(document) },
+    { label: t('workspace.moveTo'), icon: 'move', onSelect: () => onMove(document) },
+    { label: t('workspace.rename'), icon: 'edit', onSelect: () => onRename(document) },
+    { label: t('workspace.delete'), icon: 'trash', danger: true, onSelect: () => onDelete(document) },
   ];
+  const syncText = t(syncLabelKey[document.syncState]);
 
   return (
     <div
@@ -697,19 +841,19 @@ function DocumentRow({
         className={styles.documentButton}
         onClick={() => onSelect(document.id)}
         onDoubleClick={() => onRename(document)}
-        title={`${document.name} · ${syncLabel[document.syncState]}`}
+        title={`${document.name} · ${syncText}`}
       >
         <span className={styles.diagramIcon}><Icon name="diagram" /></span>
         <span className={styles.itemName}>{document.name}</span>
         <span
           className={`${styles.syncDot} ${syncClassName[document.syncState]}`}
-          aria-label={syncLabel[document.syncState]}
-          title={syncLabel[document.syncState]}
+          aria-label={syncText}
+          title={syncText}
         />
       </button>
       <div className={styles.rowActions}>
         <MoreButton
-          label="图表操作"
+          label={t('workspace.diagramActions')}
           onToggle={(event) => {
             const rect = event.currentTarget.getBoundingClientRect();
             if (menu.open) menu.setOpen(false);
@@ -732,6 +876,7 @@ function FolderRow({
   collapsed,
   childFolders,
   childDocuments,
+  t,
   onToggle,
   onCreateDocument,
   onCreateFolder,
@@ -744,6 +889,7 @@ function FolderRow({
   collapsed: boolean;
   childFolders: WorkspaceFolder[];
   childDocuments: WorkspaceDocument[];
+  t: Translate;
   onToggle: () => void;
   onCreateDocument: (folderId?: string | null) => void;
   onCreateFolder: (parentId?: string | null) => void;
@@ -754,10 +900,10 @@ function FolderRow({
 }) {
   const menu = useFloatingMenu();
   const items: MenuItem[] = [
-    { label: '在此新建图表', icon: 'diagram-plus', onSelect: () => onCreateDocument(folder.id) },
-    { label: '新建子文件夹', icon: 'folder-plus', onSelect: () => onCreateFolder(folder.id) },
-    { label: '重命名', icon: 'edit', onSelect: () => onRename(folder) },
-    { label: '删除', icon: 'trash', danger: true, onSelect: () => onDelete(folder) },
+    { label: t('workspace.newDiagramInFolder'), icon: 'diagram-plus', onSelect: () => onCreateDocument(folder.id) },
+    { label: t('workspace.newSubfolder'), icon: 'folder-plus', onSelect: () => onCreateFolder(folder.id) },
+    { label: t('workspace.rename'), icon: 'edit', onSelect: () => onRename(folder) },
+    { label: t('workspace.delete'), icon: 'trash', danger: true, onSelect: () => onDelete(folder) },
   ];
   const hasChildren = childFolders.length > 0 || childDocuments.length > 0;
 
@@ -774,8 +920,8 @@ function FolderRow({
           type="button"
           className={`${styles.folderToggle} ${collapsed ? '' : styles.folderToggleOpen}`}
           onClick={onToggle}
-          title={collapsed ? '展开文件夹' : '折叠文件夹'}
-          aria-label={collapsed ? `展开 ${folder.name}` : `折叠 ${folder.name}`}
+          title={collapsed ? t('workspace.expandFolder', { name: folder.name }) : t('workspace.collapseFolder', { name: folder.name })}
+          aria-label={collapsed ? t('workspace.expandFolder', { name: folder.name }) : t('workspace.collapseFolder', { name: folder.name })}
         >
           <Icon name="chevron" size={14} />
         </button>
@@ -793,7 +939,7 @@ function FolderRow({
         </button>
         <div className={styles.rowActions}>
           <MoreButton
-            label="文件夹操作"
+            label={t('workspace.folderActions')}
             onToggle={(event) => {
               const rect = event.currentTarget.getBoundingClientRect();
               if (menu.open) menu.setOpen(false);

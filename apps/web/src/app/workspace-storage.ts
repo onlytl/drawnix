@@ -77,7 +77,10 @@ export const createLocalFolder = (
   };
 };
 
-export async function loadWorkspace(): Promise<WorkspaceSnapshot> {
+export async function loadWorkspace(names?: {
+  untitled: string;
+  migrated: string;
+}): Promise<WorkspaceSnapshot> {
   const [storedDocuments, storedFolders, activeDocumentId, oldBoard] =
     await Promise.all([
       localforage.getItem<WorkspaceDocument[]>(WORKSPACE_DOCUMENTS_KEY),
@@ -106,7 +109,9 @@ export async function loadWorkspace(): Promise<WorkspaceSnapshot> {
   // One-time migration from the original single-board Drawnix storage.
   const migrated = createLocalDocument(
     null,
-    oldBoard ? '迁移的图表' : '未命名图表',
+    oldBoard
+      ? (names?.migrated ?? '迁移的图表')
+      : (names?.untitled ?? '未命名图表'),
     oldBoard ?? { children: [] },
   );
 

@@ -6,10 +6,37 @@ import {
   arTranslations,
   viTranslations,
 } from './translations';
-import { Language, Translations, I18nContextType, I18nProviderProps } from './types';
+import {
+  Language,
+  Translations,
+  I18nContextType,
+  I18nProviderProps,
+  TranslationVars,
+} from './types';
 
 const DEFAULT_LANGUAGE: Language = 'zh';
 const boardLanguageMap = new WeakMap<object, Language>();
+
+function interpolate(template: string, vars?: TranslationVars): string {
+  if (!vars) {
+    return template;
+  }
+  return template.replace(/\{(\w+)\}/g, (match, name: string) =>
+    Object.prototype.hasOwnProperty.call(vars, name)
+      ? String(vars[name])
+      : match,
+  );
+}
+
+export function translate(
+  language: Language,
+  key: keyof Translations,
+  vars?: TranslationVars,
+): string {
+  const table = translations[language] ?? translations[DEFAULT_LANGUAGE];
+  const template = table[key] || translations[DEFAULT_LANGUAGE][key] || key;
+  return interpolate(template, vars);
+}
 
 // Translation data
 const translations: Record<Language, Translations> = {
@@ -47,8 +74,8 @@ export const I18nProvider: React.FC<I18nProviderProps> = ({
   );
 
   const t = useCallback(
-    (key: keyof Translations): string => {
-      return translations[language][key] || key;
+    (key: keyof Translations, vars?: TranslationVars): string => {
+      return translate(language, key, vars);
     },
     [language]
   );
@@ -80,9 +107,8 @@ export const i18nInsidePlaitHook = (board?: object | null) => {
     return (board ? boardLanguageMap.get(board) : undefined) ?? DEFAULT_LANGUAGE;
   };
   const i18n = {
-    t: (key: keyof Translations): string => {
-      const resolvedLanguage = resolveLanguage();
-      return translations[resolvedLanguage][key] || key;
+    t: (key: keyof Translations, vars?: TranslationVars): string => {
+      return translate(resolveLanguage(), key, vars);
     },
     get language(): Language {
       return resolveLanguage();
@@ -92,4 +118,4 @@ export const i18nInsidePlaitHook = (board?: object | null) => {
   return i18n;
 };
 
-export type { Language, Translations, I18nContextType };
+export type { Language, Translations, I18nContextType, TranslationVars };

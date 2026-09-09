@@ -372,10 +372,140 @@
   justify-content: space-between;
   padding: 0 7px;
   color: var(--ws-muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+}
+
+.treeHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.headerIconButton {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--border-radius-md);
+  background: transparent;
+  color: var(--ws-muted);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--ws-hover);
+    color: var(--ws-text-strong);
+  }
+}
+
+.headerTextButton,
+.emptyTrashButton {
+  border: 0;
+  background: transparent;
+  color: var(--ws-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+}
+
+.emptyTrashButton {
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: var(--border-radius-md);
+
+  &:hover {
+    background: var(--ws-hover);
+  }
+}
+
+.trashBadge {
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--ws-danger);
+  color: #fff;
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+}
+
+.trashRow {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border-radius: var(--border-radius-md);
+  color: var(--ws-text);
+
+  &:hover {
+    background: var(--ws-hover);
+  }
+}
+
+.rowActionsVisible {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+
+  button {
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: var(--border-radius-md);
+    background: transparent;
+    color: var(--ws-muted);
+    cursor: pointer;
+
+    &:hover {
+      background: var(--ws-active);
+      color: var(--ws-text-strong);
+    }
+  }
+}
+
+.undoToast {
+  position: absolute;
+  z-index: 10050;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100% - 32px);
+  padding: 10px 12px 10px 16px;
+  border: 1px solid var(--ws-border);
+  border-radius: var(--border-radius-lg);
+  background: var(--ws-elevated);
+  box-shadow: var(--ws-shadow);
+  color: var(--ws-text-strong);
+  font-size: 13px;
+
+  button {
+    border: 0;
+    background: var(--ws-active);
+    color: var(--color-on-primary-container);
+    border-radius: var(--border-radius-md);
+    padding: 6px 10px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+  }
 }
 
 .treeCount {

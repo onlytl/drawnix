@@ -143,6 +143,8 @@ export function WorkspacePasswordInput({
   autoComplete,
   placeholder,
   name,
+  showLabel,
+  hideLabel,
 }: {
   id: string;
   value: string;
@@ -150,6 +152,8 @@ export function WorkspacePasswordInput({
   autoComplete?: string;
   placeholder?: string;
   name?: string;
+  showLabel: string;
+  hideLabel: string;
 }) {
   const [visible, setVisible] = useState(false);
 
@@ -168,8 +172,8 @@ export function WorkspacePasswordInput({
       <button
         type="button"
         className={styles.passwordToggle}
-        aria-label={visible ? '隐藏密码' : '显示密码'}
-        title={visible ? '隐藏密码' : '显示密码'}
+        aria-label={visible ? hideLabel : showLabel}
+        title={visible ? hideLabel : showLabel}
         onClick={() => setVisible((current) => !current)}
       >
         {visible ? (
