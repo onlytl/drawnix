@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Drawnix, DrawnixToolState } from '@drawnix/drawnix';
 import localforage from 'localforage';
 import styles from './app.module.scss';
@@ -12,6 +12,7 @@ import {
   saveActiveDocumentId,
   saveDocuments,
   saveFolders,
+  uniqueName,
 } from './workspace-storage';
 import {
   initializeCloudEncryption,
@@ -28,14 +29,18 @@ import {
   syncFolder,
   unlockCloudEncryption,
 } from './workspace-cloud';
-import { WorkspaceSidebar } from './workspace-sidebar';
+import { listFolderPaths, WorkspaceSidebar } from './workspace-sidebar';
+import { WorkspaceDialog, WorkspacePasswordInput } from './workspace-dialog';
 import type {
+  AppValue,
+  ChromeTheme,
   CloudSession,
   EncryptionState,
   MainBoardPreference,
   WorkspaceDocument,
   WorkspaceFolder,
 } from './workspace-types';
+import { isChromeTheme } from './workspace-types';
 
 const DEFAULT_PREFERENCE: MainBoardPreference = {
   language: 'zh',
@@ -43,10 +48,58 @@ const DEFAULT_PREFERENCE: MainBoardPreference = {
   exportTransparent: false,
 };
 
-type MoveDialogState = {
-  documentId: string;
-  folderId: string | null;
-} | null;
+const CHROME_THEME_KEY = 'drawnix_chrome_theme';
+const NAME_MAX_LENGTH = 80;
+
+type PromptState =
+  | {
+      kind: 'rename';
+      target: 'document' | 'folder';
+      id: string;
+      value: string;
+    }
+  | {
+      kind: 'create-folder';
+      parentId: string | null;
+      value: string;
+    }
+  | {
+      kind: 'delete';
+      target: 'document' | 'folder';
+      id: string;
+      name: string;
+    }
+  | {
+      kind: 'folder-not-empty';
+      name: string;
+    }
+  | {
+      kind: 'move';
+      documentId: string;
+      folderId: string | null;
+    }
+  | null;
+
+function readChromeTheme(): ChromeTheme {
+  if (typeof window === 'undefined') {
+    return 'default';
+  }
+  const stored = window.localStorage.getItem(CHROME_THEME_KEY);
+  return isChromeTheme(stored) ? stored : 'default';
+}
+
+function persistChromeTheme(theme: ChromeTheme) {
+  window.localStorage.setItem(CHROME_THEME_KEY, theme);
+}
+
+function isBoardValue(value: unknown): value is AppValue {
+  return Boolean(
+    value &&
+      typeof value === 'object' &&
+      'children' in value &&
+      Array.isArray((value as AppValue).children),
+  );
+}
 
 export function App() {
   const [documents, setDocuments] = useState<WorkspaceDocument[]>([]);
@@ -59,9 +112,11 @@ export function App() {
   const [loaded, setLoaded] = useState(false);
   const [session, setSession] = useState<CloudSession | null>(null);
   const [cloudBusy, setCloudBusy] = useState(false);
-  const [moveDialog, setMoveDialog] = useState<MoveDialogState>(null);
+  const [prompt, setPrompt] = useState<PromptState>(null);
+  const [dialogError, setDialogError] = useState('');
   const [encryptionState, setEncryptionState] =
     useState<EncryptionState>('signed-out');
+  const [encryptionDeferred, setEncryptionDeferred] = useState(false);
   const [cryptoBusy, setCryptoBusy] = useState(false);
   const [cryptoError, setCryptoError] = useState('');
   const [syncPassword, setSyncPassword] = useState('');
@@ -69,6 +124,13 @@ export function App() {
   const [recoveryMode, setRecoveryMode] = useState(false);
   const [recoveryInput, setRecoveryInput] = useState('');
   const [recoveryKey, setRecoveryKey] = useState<string | null>(null);
+  const [recoveryCopied, setRecoveryCopied] = useState(false);
+  const [expandFolderId, setExpandFolderId] = useState<string | null>(null);
+  const [fallbackTheme, setFallbackTheme] = useState<ChromeTheme>(readChromeTheme);
+  const passwordFieldId = useId();
+  const passwordConfirmId = useId();
+  const recoveryFieldId = useId();
+  const promptFieldId = useId();
 
   const documentsRef = useRef<WorkspaceDocument[]>([]);
   const foldersRef = useRef<WorkspaceFolder[]>([]);
@@ -581,65 +643,60 @@ export function App() {
   };
 
   const createDocument = (folderId: string | null = null) => {
-    const document = createLocalDocument(folderId);
+    const name = uniqueName(
+      '未命名图表',
+      documentsRef.current
+        .filter((item) => !item.deletedAt)
+        .map((item) => item.name),
+    );
+    const document = createLocalDocument(folderId, name);
     commitDocuments((current) => [...current, document]);
     activeDocumentIdRef.current = document.id;
     setActiveDocumentId(document.id);
+    if (folderId) {
+      setExpandFolderId(folderId);
+    }
     void saveActiveDocumentId(document.id);
     scheduleDocumentSync(document.id, 50);
   };
 
+  const openPrompt = (next: PromptState) => {
+    setDialogError('');
+    setPrompt(next);
+  };
+
   const createFolder = (parentId: string | null = null) => {
-    const name = window.prompt('文件夹名称', '新建文件夹')?.trim();
-    if (!name) {
-      return;
-    }
-    const folder = createLocalFolder(parentId, name);
-    commitFolders((current) => [...current, folder]);
-    if (sessionRef.current && isCloudEncryptionUnlocked()) {
-      setTimeout(() => void runFolderSync(folder.id), 50);
-    }
+    openPrompt({
+      kind: 'create-folder',
+      parentId,
+      value: uniqueName(
+        '新建文件夹',
+        foldersRef.current
+          .filter((item) => !item.deletedAt)
+          .map((item) => item.name),
+      ),
+    });
   };
 
   const renameDocument = (document: WorkspaceDocument) => {
-    const name = window.prompt('图表名称', document.name)?.trim();
-    if (!name || name === document.name) {
-      return;
-    }
-
-    const next = {
-      ...document,
-      name,
-      updatedAt: new Date().toISOString(),
-      syncState: 'pending' as const,
-    };
-    updateDocument(next);
-    scheduleDocumentSync(document.id);
+    openPrompt({
+      kind: 'rename',
+      target: 'document',
+      id: document.id,
+      value: document.name,
+    });
   };
 
   const renameFolder = (folder: WorkspaceFolder) => {
-    const name = window.prompt('文件夹名称', folder.name)?.trim();
-    if (!name || name === folder.name) {
-      return;
-    }
-
-    const next = {
-      ...folder,
-      name,
-      updatedAt: new Date().toISOString(),
-      syncState: 'pending' as const,
-    };
-    updateFolder(next);
-    if (sessionRef.current && isCloudEncryptionUnlocked()) {
-      setTimeout(() => void runFolderSync(folder.id), 50);
-    }
+    openPrompt({
+      kind: 'rename',
+      target: 'folder',
+      id: folder.id,
+      value: folder.name,
+    });
   };
 
-  const deleteDocument = async (document: WorkspaceDocument) => {
-    if (!window.confirm(`删除“${document.name}”？`)) {
-      return;
-    }
-
+  const performDeleteDocument = async (document: WorkspaceDocument) => {
     const now = new Date().toISOString();
     updateDocument({
       ...document,
@@ -649,7 +706,7 @@ export function App() {
     });
     scheduleDocumentSync(document.id, 50);
 
-    if (activeDocumentId === document.id) {
+    if (activeDocumentIdRef.current === document.id) {
       const nextId = documentsRef.current.find(
         (item) => item.id !== document.id && !item.deletedAt,
       )?.id;
@@ -663,23 +720,7 @@ export function App() {
     }
   };
 
-  const deleteFolder = (folder: WorkspaceFolder) => {
-    const hasChildren =
-      foldersRef.current.some(
-        (item) => item.parentId === folder.id && !item.deletedAt,
-      ) ||
-      documentsRef.current.some(
-        (item) => item.folderId === folder.id && !item.deletedAt,
-      );
-
-    if (hasChildren) {
-      window.alert('请先移动或删除文件夹内的图表和子文件夹。');
-      return;
-    }
-    if (!window.confirm(`删除文件夹“${folder.name}”？`)) {
-      return;
-    }
-
+  const performDeleteFolder = (folder: WorkspaceFolder) => {
     const now = new Date().toISOString();
     updateFolder({
       ...folder,
@@ -692,35 +733,152 @@ export function App() {
     }
   };
 
+  const deleteDocument = (document: WorkspaceDocument) => {
+    openPrompt({
+      kind: 'delete',
+      target: 'document',
+      id: document.id,
+      name: document.name,
+    });
+  };
+
+  const deleteFolder = (folder: WorkspaceFolder) => {
+    const hasChildren =
+      foldersRef.current.some(
+        (item) => item.parentId === folder.id && !item.deletedAt,
+      ) ||
+      documentsRef.current.some(
+        (item) => item.folderId === folder.id && !item.deletedAt,
+      );
+
+    if (hasChildren) {
+      openPrompt({
+        kind: 'folder-not-empty',
+        name: folder.name,
+      });
+      return;
+    }
+
+    openPrompt({
+      kind: 'delete',
+      target: 'folder',
+      id: folder.id,
+      name: folder.name,
+    });
+  };
+
   const openMoveDialog = (document: WorkspaceDocument) => {
-    setMoveDialog({
+    openPrompt({
+      kind: 'move',
       documentId: document.id,
       folderId: document.folderId,
     });
   };
 
-  const confirmMove = () => {
-    if (!moveDialog) {
-      return;
-    }
-
-    const document = documentsRef.current.find(
-      (item) => item.id === moveDialog.documentId,
-    );
-    if (!document || document.folderId === moveDialog.folderId) {
-      setMoveDialog(null);
+  const confirmMove = (documentId: string, folderId: string | null) => {
+    const document = documentsRef.current.find((item) => item.id === documentId);
+    if (!document || document.folderId === folderId) {
       return;
     }
 
     const next = {
       ...document,
-      folderId: moveDialog.folderId,
+      folderId,
       updatedAt: new Date().toISOString(),
       syncState: 'pending' as const,
     };
     updateDocument(next);
     scheduleDocumentSync(document.id, 50);
-    setMoveDialog(null);
+  };
+
+  const closePrompt = () => {
+    setPrompt(null);
+    setDialogError('');
+  };
+
+  const submitPrompt = () => {
+    if (!prompt) {
+      return;
+    }
+
+    if (prompt.kind === 'rename') {
+      const name = prompt.value.trim();
+      if (!name) {
+        setDialogError('名称不能为空');
+        return;
+      }
+      if (prompt.target === 'document') {
+        const current = documentsRef.current.find((item) => item.id === prompt.id);
+        if (!current || name === current.name) {
+          closePrompt();
+          return;
+        }
+        updateDocument({
+          ...current,
+          name,
+          updatedAt: new Date().toISOString(),
+          syncState: 'pending',
+        });
+        scheduleDocumentSync(current.id);
+      } else {
+        const current = foldersRef.current.find((item) => item.id === prompt.id);
+        if (!current || name === current.name) {
+          closePrompt();
+          return;
+        }
+        updateFolder({
+          ...current,
+          name,
+          updatedAt: new Date().toISOString(),
+          syncState: 'pending',
+        });
+        if (sessionRef.current && isCloudEncryptionUnlocked()) {
+          setTimeout(() => void runFolderSync(current.id), 50);
+        }
+      }
+      closePrompt();
+      return;
+    }
+
+    if (prompt.kind === 'create-folder') {
+      const name = prompt.value.trim();
+      if (!name) {
+        setDialogError('名称不能为空');
+        return;
+      }
+      const folder = createLocalFolder(prompt.parentId, name);
+      commitFolders((current) => [...current, folder]);
+      setExpandFolderId(prompt.parentId ?? folder.id);
+      if (sessionRef.current && isCloudEncryptionUnlocked()) {
+        setTimeout(() => void runFolderSync(folder.id), 50);
+      }
+      closePrompt();
+      return;
+    }
+
+    if (prompt.kind === 'delete') {
+      if (prompt.target === 'document') {
+        const current = documentsRef.current.find((item) => item.id === prompt.id);
+        if (current) {
+          void performDeleteDocument(current);
+        }
+      } else {
+        const current = foldersRef.current.find((item) => item.id === prompt.id);
+        if (current) {
+          performDeleteFolder(current);
+        }
+      }
+      closePrompt();
+      return;
+    }
+
+    if (prompt.kind === 'move') {
+      confirmMove(prompt.documentId, prompt.folderId);
+      closePrompt();
+      return;
+    }
+
+    closePrompt();
   };
 
   const resolveConflict = (
@@ -790,6 +948,7 @@ export function App() {
     try {
       const key = await setupCloudEncryption(session.user.id, syncPassword);
       setRecoveryKey(key);
+      setRecoveryCopied(false);
       setSyncPassword('');
       setSyncPasswordConfirm('');
       setEncryptionState('unlocked');
@@ -847,24 +1006,136 @@ export function App() {
     sessionRef.current = null;
     setSession(null);
     setEncryptionState('signed-out');
+    setEncryptionDeferred(false);
     setRecoveryKey(null);
+    setRecoveryCopied(false);
     setCryptoError('');
   };
 
+  const deferEncryption = () => {
+    if (recoveryKey) {
+      return;
+    }
+    setEncryptionDeferred(true);
+    setCryptoError('');
+    setSyncPassword('');
+    setSyncPasswordConfirm('');
+    setRecoveryMode(false);
+  };
+
+  const copyRecoveryKey = async () => {
+    if (!recoveryKey) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(recoveryKey);
+      setRecoveryCopied(true);
+    } catch {
+      setCryptoError('复制失败，请手动选中恢复密钥');
+    }
+  };
+
+  useEffect(() => {
+    const mode = activeDocument?.content.theme?.themeColorMode;
+    if (isChromeTheme(mode)) {
+      setFallbackTheme(mode);
+      persistChromeTheme(mode);
+    }
+  }, [activeDocument?.content.theme?.themeColorMode, activeDocument?.id]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'F2' || event.repeat) {
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+      ) {
+        return;
+      }
+      if (prompt) {
+        return;
+      }
+      const current = documentsRef.current.find(
+        (item) => item.id === activeDocumentIdRef.current && !item.deletedAt,
+      );
+      if (!current) {
+        return;
+      }
+      event.preventDefault();
+      setDialogError('');
+      setPrompt({
+        kind: 'rename',
+        target: 'document',
+        id: current.id,
+        value: current.name,
+      });
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [prompt]);
+
   if (!loaded) {
-    return null;
+    return (
+      <div className={`${styles.workspace} ${styles[`theme_${readChromeTheme()}`]}`}>
+        <div className={styles.bootScreen}>Drawnix</div>
+      </div>
+    );
   }
 
-  const visibleFolders = folders.filter((folder) => !folder.deletedAt);
+  const folderOptions = listFolderPaths(folders);
   const showEncryptionDialog = Boolean(
     session &&
+      !encryptionDeferred &&
       (recoveryKey ||
         encryptionState === 'setup-required' ||
         encryptionState === 'locked'),
   );
+  const documentTheme = activeDocument?.content.theme?.themeColorMode;
+  const chromeTheme = isChromeTheme(documentTheme)
+    ? documentTheme
+    : fallbackTheme;
+
+  const encryptionTitle = recoveryKey
+    ? '保存恢复密钥'
+    : encryptionState === 'setup-required'
+      ? '开启加密云同步'
+      : recoveryMode
+        ? '使用恢复密钥'
+        : '解锁云同步';
+
+  const encryptionDescription = recoveryKey
+    ? '云端数据已经开始使用客户端加密。下面的恢复密钥只显示这一次，建议保存到密码管理器。'
+    : encryptionState === 'setup-required'
+      ? '图表内容和名称会在浏览器里使用 AES-256-GCM 加密后再上传。Supabase 只保存密文。'
+      : recoveryMode
+        ? '输入恢复密钥，并设置一个新的同步密码。已有图表不会重新加密，只会重新包裹主密钥。'
+        : '这是新设备或本地密钥已经被清除。输入同步密码后，这台设备会记住解密主密钥。';
+
+  const promptTitle =
+    prompt?.kind === 'rename'
+      ? prompt.target === 'document'
+        ? '重命名图表'
+        : '重命名文件夹'
+      : prompt?.kind === 'create-folder'
+        ? '新建文件夹'
+        : prompt?.kind === 'delete'
+          ? prompt.target === 'document'
+            ? '删除图表'
+            : '删除文件夹'
+          : prompt?.kind === 'folder-not-empty'
+            ? '无法删除文件夹'
+            : prompt?.kind === 'move'
+              ? '移动图表'
+              : '';
 
   return (
-    <div className={styles.workspace}>
+    <div className={`${styles.workspace} ${styles[`theme_${chromeTheme}`]}`}>
+      <a className={styles.skipLink} href="#workspace-canvas">
+        跳到画布
+      </a>
       <WorkspaceSidebar
         folders={folders}
         documents={documents}
@@ -873,6 +1144,7 @@ export function App() {
         cloudConfigured={isCloudConfigured}
         cloudBusy={cloudBusy}
         encryptionState={encryptionState}
+        expandFolderId={expandFolderId}
         onSelectDocument={selectDocument}
         onCreateDocument={createDocument}
         onCreateFolder={createFolder}
@@ -883,9 +1155,10 @@ export function App() {
         onDeleteFolder={deleteFolder}
         onSignIn={signInWithGitHub}
         onSignOut={handleSignOut}
+        onUnlock={() => setEncryptionDeferred(false)}
       />
 
-      <main className={styles.canvas}>
+      <main id="workspace-canvas" className={styles.canvas}>
         {activeDocument ? (
           <>
             {activeDocument.syncState === 'conflict' && (
@@ -937,18 +1210,28 @@ export function App() {
                 const current = documentsRef.current.find(
                   (document) => document.id === activeDocument.id,
                 );
-                if (!current) {
+                if (!current || !isBoardValue(value)) {
                   return;
                 }
 
                 const next: WorkspaceDocument = {
                   ...current,
-                  content: value,
+                  content: {
+                    children: value.children,
+                    viewport: value.viewport,
+                    theme: value.theme,
+                  },
                   updatedAt: new Date().toISOString(),
                   syncState: 'pending',
                 };
                 updateDocument(next);
                 scheduleDocumentSync(next.id);
+              }}
+              onThemeChange={(themeColorMode) => {
+                if (isChromeTheme(themeColorMode)) {
+                  setFallbackTheme(themeColorMode);
+                  persistChromeTheme(themeColorMode);
+                }
               }}
               onToolStateChange={(toolState) => {
                 void localforage.setItem(MAIN_BOARD_TOOL_STATE_KEY, toolState);
@@ -964,214 +1247,320 @@ export function App() {
             <div>
               <h2>开始你的第一张图</h2>
               <p>图表会先保存在本地，登录后加密同步到 Supabase。</p>
-              <button onClick={() => createDocument(null)}>新建图表</button>
-            </div>
-          </div>
-        )}
-
-        {moveDialog && (
-          <div className={styles.modalBackdrop}>
-            <div className={styles.modal}>
-              <h3>移动图表</h3>
-              <label>
-                目标文件夹
-                <select
-                  value={moveDialog.folderId ?? ''}
-                  onChange={(event) =>
-                    setMoveDialog({
-                      ...moveDialog,
-                      folderId: event.target.value || null,
-                    })
-                  }
-                >
-                  <option value="">根目录</option>
-                  {visibleFolders.map((folder) => (
-                    <option key={folder.id} value={folder.id}>
-                      {folder.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className={styles.modalActions}>
-                <button onClick={() => setMoveDialog(null)}>取消</button>
-                <button className={styles.primaryButton} onClick={confirmMove}>
-                  移动
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {showEncryptionDialog && (
-          <div className={styles.modalBackdrop}>
-            <div className={`${styles.modal} ${styles.cryptoModal}`}>
-              {recoveryKey ? (
-                <>
-                  <h3>保存恢复密钥</h3>
-                  <p className={styles.modalLead}>
-                    云端数据已经开始使用客户端加密。下面的恢复密钥只显示这一次，建议保存到密码管理器。
-                  </p>
-                  <div className={styles.recoveryKey}>{recoveryKey}</div>
-                  <div className={styles.modalActions}>
-                    <button
-                      onClick={() => void navigator.clipboard.writeText(recoveryKey)}
-                    >
-                      复制恢复密钥
-                    </button>
-                    <button
-                      className={styles.primaryButton}
-                      onClick={() => setRecoveryKey(null)}
-                    >
-                      我已保存
-                    </button>
-                  </div>
-                </>
-              ) : encryptionState === 'setup-required' ? (
-                <>
-                  <h3>开启加密云同步</h3>
-                  <p className={styles.modalLead}>
-                    图表内容和名称会在浏览器里使用 AES-256-GCM 加密后再上传。Supabase 只保存密文。
-                  </p>
-                  <label>
-                    同步密码
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      value={syncPassword}
-                      onChange={(event) => setSyncPassword(event.target.value)}
-                      placeholder="至少 8 个字符"
-                    />
-                  </label>
-                  <label>
-                    确认同步密码
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      value={syncPasswordConfirm}
-                      onChange={(event) =>
-                        setSyncPasswordConfirm(event.target.value)
-                      }
-                    />
-                  </label>
-                  <p className={styles.cryptoWarning}>
-                    同步密码不会上传到服务器。忘记密码且没有恢复密钥时，云端数据无法恢复。
-                  </p>
-                  {cryptoError && (
-                    <div className={styles.cryptoError}>{cryptoError}</div>
-                  )}
-                  <div className={styles.modalActions}>
-                    <button
-                      className={styles.primaryButton}
-                      disabled={cryptoBusy}
-                      onClick={() => void handleSetupEncryption()}
-                    >
-                      {cryptoBusy ? '正在设置…' : '开启加密同步'}
-                    </button>
-                  </div>
-                </>
-              ) : !recoveryMode ? (
-                <>
-                  <h3>解锁云同步</h3>
-                  <p className={styles.modalLead}>
-                    这是新设备或本地密钥已经被清除。输入同步密码后，这台设备会记住解密主密钥。
-                  </p>
-                  <label>
-                    同步密码
-                    <input
-                      type="password"
-                      autoComplete="current-password"
-                      value={syncPassword}
-                      onChange={(event) => setSyncPassword(event.target.value)}
-                    />
-                  </label>
-                  {cryptoError && (
-                    <div className={styles.cryptoError}>{cryptoError}</div>
-                  )}
-                  <div className={styles.modalActionsBetween}>
-                    <button
-                      className={styles.linkButton}
-                      onClick={() => {
-                        setCryptoError('');
-                        setRecoveryMode(true);
-                        setSyncPassword('');
-                      }}
-                    >
-                      忘记密码？使用恢复密钥
-                    </button>
-                    <button
-                      className={styles.primaryButton}
-                      disabled={cryptoBusy}
-                      onClick={() => void handleUnlockEncryption()}
-                    >
-                      {cryptoBusy ? '正在解锁…' : '解锁'}
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <h3>使用恢复密钥</h3>
-                  <p className={styles.modalLead}>
-                    输入恢复密钥，并设置一个新的同步密码。已有图表不会重新加密，只会重新包裹主密钥。
-                  </p>
-                  <label>
-                    恢复密钥
-                    <textarea
-                      rows={3}
-                      value={recoveryInput}
-                      onChange={(event) => setRecoveryInput(event.target.value)}
-                      placeholder="drawnix-recovery-v1..."
-                    />
-                  </label>
-                  <label>
-                    新同步密码
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      value={syncPassword}
-                      onChange={(event) => setSyncPassword(event.target.value)}
-                    />
-                  </label>
-                  <label>
-                    确认新同步密码
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      value={syncPasswordConfirm}
-                      onChange={(event) =>
-                        setSyncPasswordConfirm(event.target.value)
-                      }
-                    />
-                  </label>
-                  {cryptoError && (
-                    <div className={styles.cryptoError}>{cryptoError}</div>
-                  )}
-                  <div className={styles.modalActionsBetween}>
-                    <button
-                      className={styles.linkButton}
-                      onClick={() => {
-                        setRecoveryMode(false);
-                        setCryptoError('');
-                        setRecoveryInput('');
-                        setSyncPassword('');
-                        setSyncPasswordConfirm('');
-                      }}
-                    >
-                      返回密码解锁
-                    </button>
-                    <button
-                      className={styles.primaryButton}
-                      disabled={cryptoBusy}
-                      onClick={() => void handleRecoverEncryption()}
-                    >
-                      {cryptoBusy ? '正在恢复…' : '恢复并设置新密码'}
-                    </button>
-                  </div>
-                </>
-              )}
+              <button type="button" onClick={() => createDocument(null)}>
+                新建图表
+              </button>
             </div>
           </div>
         )}
       </main>
+
+      <WorkspaceDialog
+        open={prompt !== null}
+        title={promptTitle}
+        description={
+          prompt?.kind === 'delete'
+            ? `删除后可从其他设备同步消失。此操作会把“${prompt.name}”标记为删除。`
+            : prompt?.kind === 'folder-not-empty'
+              ? `请先移动或删除“${prompt.name}”内的图表和子文件夹。`
+              : prompt?.kind === 'move'
+                ? '选择图表要放入的文件夹。'
+                : prompt?.kind === 'create-folder'
+                  ? '文件夹用于整理多张图表。'
+                  : prompt?.kind === 'rename'
+                    ? '名称会显示在左侧工作区，并随加密云同步一起保存。'
+                    : undefined
+        }
+        onClose={closePrompt}
+      >
+        {prompt?.kind === 'rename' || prompt?.kind === 'create-folder' ? (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitPrompt();
+            }}
+          >
+            <label htmlFor={promptFieldId}>
+              {prompt.kind === 'create-folder' ? '文件夹名称' : '名称'}
+              <input
+                id={promptFieldId}
+                value={prompt.value}
+                maxLength={NAME_MAX_LENGTH}
+                autoComplete="off"
+                onChange={(event) =>
+                  setPrompt({ ...prompt, value: event.target.value })
+                }
+              />
+            </label>
+            {dialogError ? <div className={styles.fieldError}>{dialogError}</div> : null}
+            <div className={styles.modalActions}>
+              <button type="button" onClick={closePrompt}>
+                取消
+              </button>
+              <button type="submit" className={styles.primaryButton}>
+                {prompt.kind === 'create-folder' ? '创建' : '保存'}
+              </button>
+            </div>
+          </form>
+        ) : null}
+
+        {prompt?.kind === 'move' ? (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitPrompt();
+            }}
+          >
+            <label htmlFor={promptFieldId}>
+              目标文件夹
+              <select
+                id={promptFieldId}
+                value={prompt.folderId ?? ''}
+                onChange={(event) =>
+                  setPrompt({
+                    ...prompt,
+                    folderId: event.target.value || null,
+                  })
+                }
+              >
+                <option value="">根目录</option>
+                {folderOptions.map((folder) => (
+                  <option key={folder.id} value={folder.id}>
+                    {folder.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className={styles.modalActions}>
+              <button type="button" onClick={closePrompt}>
+                取消
+              </button>
+              <button type="submit" className={styles.primaryButton}>
+                移动
+              </button>
+            </div>
+          </form>
+        ) : null}
+
+        {prompt?.kind === 'delete' ? (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitPrompt();
+            }}
+          >
+            <div className={styles.modalActions}>
+              <button type="button" onClick={closePrompt}>
+                取消
+              </button>
+              <button
+                type="submit"
+                className={styles.dangerButton}
+                data-dialog-initial-focus="true"
+              >
+                删除
+              </button>
+            </div>
+          </form>
+        ) : null}
+
+        {prompt?.kind === 'folder-not-empty' ? (
+          <div className={styles.modalActions}>
+            <button
+              type="button"
+              className={styles.primaryButton}
+              data-dialog-initial-focus="true"
+              onClick={closePrompt}
+            >
+              知道了
+            </button>
+          </div>
+        ) : null}
+      </WorkspaceDialog>
+
+      <WorkspaceDialog
+        open={showEncryptionDialog}
+        title={encryptionTitle}
+        description={encryptionDescription}
+        wide
+        closeOnBackdrop={!recoveryKey}
+        onClose={recoveryKey ? undefined : deferEncryption}
+      >
+        {recoveryKey ? (
+          <>
+            <div className={styles.recoveryKey}>{recoveryKey}</div>
+            {cryptoError ? <div className={styles.cryptoError}>{cryptoError}</div> : null}
+            <div className={styles.modalActions}>
+              <button type="button" onClick={() => void copyRecoveryKey()}>
+                {recoveryCopied ? '已复制' : '复制恢复密钥'}
+              </button>
+              <button
+                type="button"
+                className={styles.primaryButton}
+                data-dialog-initial-focus="true"
+                onClick={() => {
+                  setRecoveryKey(null);
+                  setRecoveryCopied(false);
+                }}
+              >
+                我已保存
+              </button>
+            </div>
+          </>
+        ) : encryptionState === 'setup-required' ? (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleSetupEncryption();
+            }}
+          >
+            <label htmlFor={passwordFieldId}>
+              同步密码
+              <WorkspacePasswordInput
+                id={passwordFieldId}
+                name="drawnix-sync-password"
+                autoComplete="new-password"
+                placeholder="至少 8 个字符"
+                value={syncPassword}
+                onChange={setSyncPassword}
+              />
+            </label>
+            <label htmlFor={passwordConfirmId}>
+              确认同步密码
+              <WorkspacePasswordInput
+                id={passwordConfirmId}
+                name="drawnix-sync-password-confirm"
+                autoComplete="new-password"
+                value={syncPasswordConfirm}
+                onChange={setSyncPasswordConfirm}
+              />
+            </label>
+            <p className={styles.cryptoWarning}>
+              同步密码不会上传到服务器。忘记密码且没有恢复密钥时，云端数据无法恢复。
+            </p>
+            {cryptoError ? <div className={styles.cryptoError}>{cryptoError}</div> : null}
+            <div className={styles.modalActionsBetween}>
+              <button type="button" className={styles.linkButton} onClick={deferEncryption}>
+                稍后设置，先用本地
+              </button>
+              <button
+                type="submit"
+                className={styles.primaryButton}
+                disabled={cryptoBusy}
+              >
+                {cryptoBusy ? '正在设置…' : '开启加密同步'}
+              </button>
+            </div>
+          </form>
+        ) : !recoveryMode ? (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleUnlockEncryption();
+            }}
+          >
+            <label htmlFor={passwordFieldId}>
+              同步密码
+              <WorkspacePasswordInput
+                id={passwordFieldId}
+                name="drawnix-sync-password"
+                autoComplete="current-password"
+                value={syncPassword}
+                onChange={setSyncPassword}
+              />
+            </label>
+            {cryptoError ? <div className={styles.cryptoError}>{cryptoError}</div> : null}
+            <div className={styles.modalActionsBetween}>
+              <button type="button" className={styles.linkButton} onClick={deferEncryption}>
+                稍后解锁，先用本地
+              </button>
+              <button
+                type="submit"
+                className={styles.primaryButton}
+                disabled={cryptoBusy}
+              >
+                {cryptoBusy ? '正在解锁…' : '解锁'}
+              </button>
+            </div>
+            <div className={styles.modalActions}>
+              <button
+                type="button"
+                className={styles.linkButton}
+                onClick={() => {
+                  setCryptoError('');
+                  setRecoveryMode(true);
+                  setSyncPassword('');
+                }}
+              >
+                忘记密码？使用恢复密钥
+              </button>
+            </div>
+          </form>
+        ) : (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleRecoverEncryption();
+            }}
+          >
+            <label htmlFor={recoveryFieldId}>
+              恢复密钥
+              <textarea
+                id={recoveryFieldId}
+                rows={3}
+                value={recoveryInput}
+                onChange={(event) => setRecoveryInput(event.target.value)}
+                placeholder="drawnix-recovery-v1..."
+                spellCheck={false}
+                autoComplete="off"
+              />
+            </label>
+            <label htmlFor={passwordFieldId}>
+              新同步密码
+              <WorkspacePasswordInput
+                id={passwordFieldId}
+                name="drawnix-sync-password"
+                autoComplete="new-password"
+                value={syncPassword}
+                onChange={setSyncPassword}
+              />
+            </label>
+            <label htmlFor={passwordConfirmId}>
+              确认新同步密码
+              <WorkspacePasswordInput
+                id={passwordConfirmId}
+                name="drawnix-sync-password-confirm"
+                autoComplete="new-password"
+                value={syncPasswordConfirm}
+                onChange={setSyncPasswordConfirm}
+              />
+            </label>
+            {cryptoError ? <div className={styles.cryptoError}>{cryptoError}</div> : null}
+            <div className={styles.modalActionsBetween}>
+              <button
+                type="button"
+                className={styles.linkButton}
+                onClick={() => {
+                  setRecoveryMode(false);
+                  setCryptoError('');
+                  setRecoveryInput('');
+                  setSyncPassword('');
+                  setSyncPasswordConfirm('');
+                }}
+              >
+                返回密码解锁
+              </button>
+              <button
+                type="submit"
+                className={styles.primaryButton}
+                disabled={cryptoBusy}
+              >
+                {cryptoBusy ? '正在恢复…' : '恢复并设置新密码'}
+              </button>
+            </div>
+          </form>
+        )}
+      </WorkspaceDialog>
     </div>
   );
 }

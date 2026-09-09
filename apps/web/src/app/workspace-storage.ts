@@ -25,6 +25,19 @@ type WorkspaceSnapshot = {
   activeDocumentId?: string;
 };
 
+export function uniqueName(base: string, existing: Iterable<string>) {
+  const names = new Set(existing);
+  if (!names.has(base)) {
+    return base;
+  }
+
+  let index = 2;
+  while (names.has(`${base} ${index}`)) {
+    index += 1;
+  }
+  return `${base} ${index}`;
+}
+
 export const createLocalDocument = (
   folderId: string | null,
   name = '未命名图表',

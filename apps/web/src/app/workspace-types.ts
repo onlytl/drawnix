@@ -8,6 +8,21 @@ export type AppValue = {
 
 export type Language = 'zh' | 'en' | 'ru' | 'ar' | 'vi';
 
+export const CHROME_THEMES = [
+  'default',
+  'colorful',
+  'soft',
+  'retro',
+  'dark',
+  'starry',
+] as const;
+
+export type ChromeTheme = (typeof CHROME_THEMES)[number];
+
+export function isChromeTheme(value: unknown): value is ChromeTheme {
+  return CHROME_THEMES.includes(value as ChromeTheme);
+}
+
 export type MainBoardPreference = {
   language: Language;
   copyTransparent: boolean;
