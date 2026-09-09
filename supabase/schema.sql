@@ -37,6 +37,9 @@ alter table public.documents enable row level security;
 grant select, insert, update, delete on public.folders to authenticated;
 grant select, insert, update, delete on public.documents to authenticated;
 
+revoke all on public.folders from anon;
+revoke all on public.documents from anon;
+
 drop policy if exists "folders_select_own" on public.folders;
 drop policy if exists "folders_insert_own" on public.folders;
 drop policy if exists "folders_update_own" on public.folders;
@@ -44,20 +47,24 @@ drop policy if exists "folders_delete_own" on public.folders;
 
 create policy "folders_select_own"
   on public.folders for select
-  using (auth.uid() = user_id);
+  to authenticated
+  using ((select auth.uid()) = user_id);
 
 create policy "folders_insert_own"
   on public.folders for insert
-  with check (auth.uid() = user_id);
+  to authenticated
+  with check ((select auth.uid()) = user_id);
 
 create policy "folders_update_own"
   on public.folders for update
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+  to authenticated
+  using ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);
 
 create policy "folders_delete_own"
   on public.folders for delete
-  using (auth.uid() = user_id);
+  to authenticated
+  using ((select auth.uid()) = user_id);
 
 drop policy if exists "documents_select_own" on public.documents;
 drop policy if exists "documents_insert_own" on public.documents;
@@ -66,17 +73,21 @@ drop policy if exists "documents_delete_own" on public.documents;
 
 create policy "documents_select_own"
   on public.documents for select
-  using (auth.uid() = user_id);
+  to authenticated
+  using ((select auth.uid()) = user_id);
 
 create policy "documents_insert_own"
   on public.documents for insert
-  with check (auth.uid() = user_id);
+  to authenticated
+  with check ((select auth.uid()) = user_id);
 
 create policy "documents_update_own"
   on public.documents for update
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+  to authenticated
+  using ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);
 
 create policy "documents_delete_own"
   on public.documents for delete
-  using (auth.uid() = user_id);
+  to authenticated
+  using ((select auth.uid()) = user_id);
