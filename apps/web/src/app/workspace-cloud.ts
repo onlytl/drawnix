@@ -330,46 +330,51 @@ export async function syncFolder(
     }
   }
 
-  const remote = mapFolder(existing);
-  if (remote.revision > folder.syncedRevision) {
-    if (folder.syncedRevision === 0) {
-      const localTime = timeValue(folder.updatedAt);
-      const remoteTime = timeValue(remote.updatedAt);
-      if (localTime === remoteTime) {
-        return { status: 'synced', revision: remote.revision };
-      }
-      if (localTime < remoteTime) {
-        return { status: 'conflict', remote };
-      }
-    } else {
+  const localTime = timeValue(folder.updatedAt);
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const remote = mapFolder(existing);
+    const remoteTime = timeValue(remote.updatedAt);
+
+    if (remote.revision > folder.syncedRevision && remoteTime > localTime) {
       return { status: 'conflict', remote };
     }
-  }
 
-  const nextRevision = existing.revision + 1;
-  const updated = await restRequest<FolderRow[]>(
-    `folders?id=eq.${encodeURIComponent(folder.id)}&revision=eq.${existing.revision}`,
-    {
-      method: 'PATCH',
-      headers: { Prefer: 'return=representation' },
-      body: JSON.stringify({
-        parent_id: folder.parentId,
-        name: folder.name,
-        sort_order: folder.sortOrder,
-        revision: nextRevision,
-        updated_at: folder.updatedAt,
-        deleted_at: folder.deletedAt ?? null,
-      }),
-    },
-  );
+    const nextRevision = existing.revision + 1;
+    const updated = await restRequest<FolderRow[]>(
+      `folders?id=eq.${encodeURIComponent(folder.id)}&revision=eq.${existing.revision}`,
+      {
+        method: 'PATCH',
+        headers: { Prefer: 'return=representation' },
+        body: JSON.stringify({
+          parent_id: folder.parentId,
+          name: folder.name,
+          sort_order: folder.sortOrder,
+          revision: nextRevision,
+          updated_at: folder.updatedAt,
+          deleted_at: folder.deletedAt ?? null,
+        }),
+      },
+    );
 
-  if (!updated.length) {
+    if (updated.length) {
+      return { status: 'synced', revision: updated[0].revision };
+    }
+
     const latest = await getFolderRow(folder.id);
     if (!latest) throw new Error('Folder disappeared while syncing');
-    return { status: 'conflict', remote: mapFolder(latest) };
+
+    const latestRemote = mapFolder(latest);
+    if (timeValue(latestRemote.updatedAt) > localTime) {
+      return { status: 'conflict', remote: latestRemote };
+    }
+
+    existing = latest;
   }
 
-  return { status: 'synced', revision: updated[0].revision };
+  const latest = await getFolderRow(folder.id);
+  if (!latest) throw new Error('Folder disappeared while syncing');
+  return { status: 'conflict', remote: mapFolder(latest) };
 }
 
 export async function syncDocument(
@@ -411,44 +416,49 @@ export async function syncDocument(
     }
   }
 
-  const remote = mapDocument(existing);
-  if (remote.revision > document.syncedRevision) {
-    if (document.syncedRevision === 0) {
-      const localTime = timeValue(document.updatedAt);
-      const remoteTime = timeValue(remote.updatedAt);
-      if (localTime === remoteTime) {
-        return { status: 'synced', revision: remote.revision };
-      }
-      if (localTime < remoteTime) {
-        return { status: 'conflict', remote };
-      }
-    } else {
+  const localTime = timeValue(document.updatedAt);
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const remote = mapDocument(existing);
+    const remoteTime = timeValue(remote.updatedAt);
+
+    if (remote.revision > document.syncedRevision && remoteTime > localTime) {
       return { status: 'conflict', remote };
     }
-  }
 
-  const nextRevision = existing.revision + 1;
-  const updated = await restRequest<DocumentRow[]>(
-    `documents?id=eq.${encodeURIComponent(document.id)}&revision=eq.${existing.revision}`,
-    {
-      method: 'PATCH',
-      headers: { Prefer: 'return=representation' },
-      body: JSON.stringify({
-        folder_id: document.folderId,
-        name: document.name,
-        content: document.content,
-        revision: nextRevision,
-        updated_at: document.updatedAt,
-        deleted_at: document.deletedAt ?? null,
-      }),
-    },
-  );
+    const nextRevision = existing.revision + 1;
+    const updated = await restRequest<DocumentRow[]>(
+      `documents?id=eq.${encodeURIComponent(document.id)}&revision=eq.${existing.revision}`,
+      {
+        method: 'PATCH',
+        headers: { Prefer: 'return=representation' },
+        body: JSON.stringify({
+          folder_id: document.folderId,
+          name: document.name,
+          content: document.content,
+          revision: nextRevision,
+          updated_at: document.updatedAt,
+          deleted_at: document.deletedAt ?? null,
+        }),
+      },
+    );
 
-  if (!updated.length) {
+    if (updated.length) {
+      return { status: 'synced', revision: updated[0].revision };
+    }
+
     const latest = await getDocumentRow(document.id);
     if (!latest) throw new Error('Document disappeared while syncing');
-    return { status: 'conflict', remote: mapDocument(latest) };
+
+    const latestRemote = mapDocument(latest);
+    if (timeValue(latestRemote.updatedAt) > localTime) {
+      return { status: 'conflict', remote: latestRemote };
+    }
+
+    existing = latest;
   }
 
-  return { status: 'synced', revision: updated[0].revision };
+  const latest = await getDocumentRow(document.id);
+  if (!latest) throw new Error('Document disappeared while syncing');
+  return { status: 'conflict', remote: mapDocument(latest) };
 }
