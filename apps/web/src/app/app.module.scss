@@ -580,23 +580,83 @@
     display: flex;
     flex-direction: column;
     gap: 7px;
+    margin-top: 12px;
     color: #66666c;
   }
 
-  select {
+  select,
+  input,
+  textarea {
     width: 100%;
+    box-sizing: border-box;
     border: 1px solid #d9d9dd;
     border-radius: 8px;
     background: white;
-    padding: 8px 9px;
+    padding: 9px 10px;
     color: #28282c;
+    font: inherit;
+    outline: none;
+
+    &:focus {
+      border-color: #9ca3af;
+      box-shadow: 0 0 0 3px rgba(82, 102, 126, 0.1);
+    }
+  }
+
+  textarea {
+    resize: vertical;
+    min-height: 76px;
   }
 }
 
-.modalActions {
+.cryptoModal {
+  width: min(440px, calc(100% - 32px));
+}
+
+.modalLead {
+  margin: -3px 0 14px;
+  color: #6f7076;
+  line-height: 1.65;
+}
+
+.cryptoWarning {
+  margin: 13px 0 0;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: #fff8e8;
+  color: #86651f;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.cryptoError {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #fff0ef;
+  color: #a34540;
+  font-size: 12px;
+}
+
+.recoveryKey {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #e0e1e4;
+  border-radius: 9px;
+  background: #f7f7f8;
+  color: #34343a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.modalActions,
+.modalActionsBetween {
   margin-top: 16px;
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
   gap: 8px;
 
   button {
@@ -605,6 +665,12 @@
     border-radius: 8px;
     padding: 7px 12px;
     cursor: pointer;
+    color: #45454a;
+
+    &:disabled {
+      cursor: wait;
+      opacity: 0.6;
+    }
   }
 
   .primaryButton {
@@ -614,9 +680,34 @@
   }
 }
 
+.modalActions {
+  justify-content: flex-end;
+}
+
+.modalActionsBetween {
+  justify-content: space-between;
+}
+
+.linkButton {
+  border: 0 !important;
+  background: transparent !important;
+  padding-left: 0 !important;
+  color: #66758a !important;
+  font-size: 12px;
+}
+
 @media (max-width: 800px) {
   .sidebar:not(.sidebarCollapsed) {
     width: 240px !important;
     min-width: 240px !important;
+  }
+
+  .modalActionsBetween {
+    align-items: stretch;
+    flex-direction: column;
+
+    button {
+      width: 100%;
+    }
   }
 }
