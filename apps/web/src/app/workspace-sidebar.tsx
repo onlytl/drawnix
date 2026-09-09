@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import styles from './app.module.scss';
 import type {
   CloudSession,
+  EncryptionState,
   WorkspaceDocument,
   WorkspaceFolder,
 } from './workspace-types';
@@ -13,6 +14,7 @@ type Props = {
   session: CloudSession | null;
   cloudConfigured: boolean;
   cloudBusy: boolean;
+  encryptionState: EncryptionState;
   onSelectDocument: (id: string) => void;
   onCreateDocument: (folderId?: string | null) => void;
   onCreateFolder: (parentId?: string | null) => void;
@@ -72,94 +74,34 @@ function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
 
   switch (name) {
     case 'chevron':
-      return (
-        <svg {...common}>
-          <path d="m9 18 6-6-6-6" />
-        </svg>
-      );
+      return <svg {...common}><path d="m9 18 6-6-6-6" /></svg>;
     case 'folder':
-      return (
-        <svg {...common}>
-          <path d="M3.5 6.5A2.5 2.5 0 0 1 6 4h3.2l2 2H18a2.5 2.5 0 0 1 2.5 2.5V17A2.5 2.5 0 0 1 18 19.5H6A2.5 2.5 0 0 1 3.5 17Z" />
-        </svg>
-      );
+      return <svg {...common}><path d="M3.5 6.5A2.5 2.5 0 0 1 6 4h3.2l2 2H18a2.5 2.5 0 0 1 2.5 2.5V17A2.5 2.5 0 0 1 18 19.5H6A2.5 2.5 0 0 1 3.5 17Z" /></svg>;
     case 'folder-open':
-      return (
-        <svg {...common}>
-          <path d="M3.5 8V6.5A2.5 2.5 0 0 1 6 4h3.2l2 2H18a2.5 2.5 0 0 1 2.5 2.5" />
-          <path d="M4.2 9h16.6l-2 8.2a3 3 0 0 1-2.9 2.3H6.7a2.5 2.5 0 0 1-2.4-1.9L2.5 11.5A2 2 0 0 1 4.2 9Z" />
-        </svg>
-      );
+      return <svg {...common}><path d="M3.5 8V6.5A2.5 2.5 0 0 1 6 4h3.2l2 2H18a2.5 2.5 0 0 1 2.5 2.5" /><path d="M4.2 9h16.6l-2 8.2a3 3 0 0 1-2.9 2.3H6.7a2.5 2.5 0 0 1-2.4-1.9L2.5 11.5A2 2 0 0 1 4.2 9Z" /></svg>;
     case 'diagram':
-      return (
-        <svg {...common}>
-          <rect x="3" y="4" width="6" height="5" rx="1" />
-          <rect x="15" y="4" width="6" height="5" rx="1" />
-          <rect x="9" y="15" width="6" height="5" rx="1" />
-          <path d="M6 9v2h12V9M12 11v4" />
-        </svg>
-      );
+      return <svg {...common}><rect x="3" y="4" width="6" height="5" rx="1" /><rect x="15" y="4" width="6" height="5" rx="1" /><rect x="9" y="15" width="6" height="5" rx="1" /><path d="M6 9v2h12V9M12 11v4" /></svg>;
     case 'diagram-plus':
-      return (
-        <svg {...common}>
-          <rect x="3" y="5" width="6" height="5" rx="1" />
-          <rect x="9" y="15" width="6" height="5" rx="1" />
-          <path d="M6 10v2h6v3" />
-          <path d="M17 5v6M14 8h6" />
-        </svg>
-      );
+      return <svg {...common}><rect x="3" y="5" width="6" height="5" rx="1" /><rect x="9" y="15" width="6" height="5" rx="1" /><path d="M6 10v2h6v3" /><path d="M17 5v6M14 8h6" /></svg>;
     case 'folder-plus':
-      return (
-        <svg {...common}>
-          <path d="M3.5 7A2.5 2.5 0 0 1 6 4.5h3.2l2 2H18a2.5 2.5 0 0 1 2.5 2.5v8A2.5 2.5 0 0 1 18 19.5H6A2.5 2.5 0 0 1 3.5 17Z" />
-          <path d="M12 10v5M9.5 12.5h5" />
-        </svg>
-      );
+      return <svg {...common}><path d="M3.5 7A2.5 2.5 0 0 1 6 4.5h3.2l2 2H18a2.5 2.5 0 0 1 2.5 2.5v8A2.5 2.5 0 0 1 18 19.5H6A2.5 2.5 0 0 1 3.5 17Z" /><path d="M12 10v5M9.5 12.5h5" /></svg>;
     case 'move':
-      return (
-        <svg {...common}>
-          <path d="M12 3v18M3 12h18" />
-          <path d="m8 7 4-4 4 4M17 8l4 4-4 4M8 17l4 4 4-4M7 8l-4 4 4 4" />
-        </svg>
-      );
+      return <svg {...common}><path d="M12 3v18M3 12h18" /><path d="m8 7 4-4 4 4M17 8l4 4-4 4M8 17l4 4 4-4M7 8l-4 4 4 4" /></svg>;
     case 'edit':
-      return (
-        <svg {...common}>
-          <path d="m4 20 4.2-1 10.6-10.6a2 2 0 0 0 0-2.8l-.4-.4a2 2 0 0 0-2.8 0L5 15.8Z" />
-          <path d="m14.5 6.5 3 3" />
-        </svg>
-      );
+      return <svg {...common}><path d="m4 20 4.2-1 10.6-10.6a2 2 0 0 0 0-2.8l-.4-.4a2 2 0 0 0-2.8 0L5 15.8Z" /><path d="m14.5 6.5 3 3" /></svg>;
     case 'trash':
-      return (
-        <svg {...common}>
-          <path d="M4 7h16M9 7V4h6v3M6.5 7l.8 13h9.4l.8-13M10 11v5M14 11v5" />
-        </svg>
-      );
+      return <svg {...common}><path d="M4 7h16M9 7V4h6v3M6.5 7l.8 13h9.4l.8-13M10 11v5M14 11v5" /></svg>;
     case 'panel-close':
-      return (
-        <svg {...common}>
-          <rect x="3" y="4" width="18" height="16" rx="2" />
-          <path d="M9 4v16M15 9l-3 3 3 3" />
-        </svg>
-      );
+      return <svg {...common}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16M15 9l-3 3 3 3" /></svg>;
     case 'panel-open':
-      return (
-        <svg {...common}>
-          <rect x="3" y="4" width="18" height="16" rx="2" />
-          <path d="M9 4v16M12 9l3 3-3 3" />
-        </svg>
-      );
+      return <svg {...common}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16M12 9l3 3-3 3" /></svg>;
   }
 }
 
 function loadSidebarWidth() {
-  if (typeof window === 'undefined') {
-    return DEFAULT_SIDEBAR_WIDTH;
-  }
+  if (typeof window === 'undefined') return DEFAULT_SIDEBAR_WIDTH;
   const stored = Number(window.localStorage.getItem(SIDEBAR_WIDTH_KEY));
-  return Number.isFinite(stored) &&
-    stored >= MIN_SIDEBAR_WIDTH &&
-    stored <= MAX_SIDEBAR_WIDTH
+  return Number.isFinite(stored) && stored >= MIN_SIDEBAR_WIDTH && stored <= MAX_SIDEBAR_WIDTH
     ? stored
     : DEFAULT_SIDEBAR_WIDTH;
 }
@@ -171,6 +113,7 @@ export function WorkspaceSidebar({
   session,
   cloudConfigured,
   cloudBusy,
+  encryptionState,
   onSelectDocument,
   onCreateDocument,
   onCreateFolder,
@@ -182,15 +125,14 @@ export function WorkspaceSidebar({
   onSignIn,
   onSignOut,
 }: Props) {
-  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(
-    new Set(),
-  );
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth);
   const resizingRef = useRef(false);
 
   const visibleFolders = folders.filter((folder) => !folder.deletedAt);
   const visibleDocuments = documents.filter((document) => !document.deletedAt);
+  const encryptionUnlocked = encryptionState === 'unlocked';
 
   useEffect(() => {
     window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
@@ -198,23 +140,17 @@ export function WorkspaceSidebar({
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
-      if (!resizingRef.current) {
-        return;
-      }
+      if (!resizingRef.current) return;
       setSidebarWidth(
         Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, event.clientX)),
       );
     };
-
     const handlePointerUp = () => {
-      if (!resizingRef.current) {
-        return;
-      }
+      if (!resizingRef.current) return;
       resizingRef.current = false;
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
-
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp);
     return () => {
@@ -226,11 +162,8 @@ export function WorkspaceSidebar({
   const toggleFolder = (folderId: string) => {
     setCollapsedFolders((current) => {
       const next = new Set(current);
-      if (next.has(folderId)) {
-        next.delete(folderId);
-      } else {
-        next.add(folderId);
-      }
+      if (next.has(folderId)) next.delete(folderId);
+      else next.add(folderId);
       return next;
     });
   };
@@ -238,9 +171,7 @@ export function WorkspaceSidebar({
   const renderDocument = (document: WorkspaceDocument) => (
     <div
       key={document.id}
-      className={`${styles.documentRow} ${
-        activeDocumentId === document.id ? styles.active : ''
-      }`}
+      className={`${styles.documentRow} ${activeDocumentId === document.id ? styles.active : ''}`}
     >
       <span className={styles.treeSpacer} />
       <button
@@ -248,9 +179,7 @@ export function WorkspaceSidebar({
         onClick={() => onSelectDocument(document.id)}
         title={`${document.name} · ${syncLabel[document.syncState]}`}
       >
-        <span className={styles.diagramIcon}>
-          <Icon name="diagram" />
-        </span>
+        <span className={styles.diagramIcon}><Icon name="diagram" /></span>
         <span className={styles.itemName}>{document.name}</span>
         <span
           className={`${styles.syncDot} ${syncClassName[document.syncState]}`}
@@ -259,63 +188,35 @@ export function WorkspaceSidebar({
         />
       </button>
       <div className={styles.rowActions}>
-        <button title="移动图表" onClick={() => onMoveDocument(document)}>
-          <Icon name="move" size={14} />
-        </button>
-        <button title="重命名" onClick={() => onRenameDocument(document)}>
-          <Icon name="edit" size={14} />
-        </button>
-        <button title="删除" onClick={() => onDeleteDocument(document)}>
-          <Icon name="trash" size={14} />
-        </button>
+        <button title="移动图表" onClick={() => onMoveDocument(document)}><Icon name="move" size={14} /></button>
+        <button title="重命名" onClick={() => onRenameDocument(document)}><Icon name="edit" size={14} /></button>
+        <button title="删除" onClick={() => onDeleteDocument(document)}><Icon name="trash" size={14} /></button>
       </div>
     </div>
   );
 
   const renderFolder = (folder: WorkspaceFolder) => {
-    const childFolders = visibleFolders.filter(
-      (item) => item.parentId === folder.id,
-    );
-    const childDocuments = visibleDocuments.filter(
-      (document) => document.folderId === folder.id,
-    );
+    const childFolders = visibleFolders.filter((item) => item.parentId === folder.id);
+    const childDocuments = visibleDocuments.filter((item) => item.folderId === folder.id);
     const isCollapsed = collapsedFolders.has(folder.id);
 
     return (
       <div key={folder.id} className={styles.folderNode}>
         <div className={styles.folderRow}>
           <button
-            className={`${styles.folderToggle} ${
-              isCollapsed ? '' : styles.folderToggleOpen
-            }`}
+            className={`${styles.folderToggle} ${isCollapsed ? '' : styles.folderToggleOpen}`}
             onClick={() => toggleFolder(folder.id)}
             title={isCollapsed ? '展开文件夹' : '折叠文件夹'}
-            aria-label={isCollapsed ? '展开文件夹' : '折叠文件夹'}
           >
             <Icon name="chevron" size={14} />
           </button>
-          <span className={styles.folderIcon}>
-            <Icon name={isCollapsed ? 'folder' : 'folder-open'} />
-          </span>
-          <span className={styles.itemName} title={folder.name}>
-            {folder.name}
-          </span>
+          <span className={styles.folderIcon}><Icon name={isCollapsed ? 'folder' : 'folder-open'} /></span>
+          <span className={styles.itemName} title={folder.name}>{folder.name}</span>
           <div className={styles.rowActions}>
-            <button title="在此新建图表" onClick={() => onCreateDocument(folder.id)}>
-              <Icon name="diagram-plus" size={14} />
-            </button>
-            <button
-              title="新建子文件夹"
-              onClick={() => onCreateFolder(folder.id)}
-            >
-              <Icon name="folder-plus" size={14} />
-            </button>
-            <button title="重命名" onClick={() => onRenameFolder(folder)}>
-              <Icon name="edit" size={14} />
-            </button>
-            <button title="删除" onClick={() => onDeleteFolder(folder)}>
-              <Icon name="trash" size={14} />
-            </button>
+            <button title="在此新建图表" onClick={() => onCreateDocument(folder.id)}><Icon name="diagram-plus" size={14} /></button>
+            <button title="新建子文件夹" onClick={() => onCreateFolder(folder.id)}><Icon name="folder-plus" size={14} /></button>
+            <button title="重命名" onClick={() => onRenameFolder(folder)}><Icon name="edit" size={14} /></button>
+            <button title="删除" onClick={() => onDeleteFolder(folder)}><Icon name="trash" size={14} /></button>
           </div>
         </div>
         {!isCollapsed && (childFolders.length > 0 || childDocuments.length > 0) && (
@@ -328,18 +229,19 @@ export function WorkspaceSidebar({
     );
   };
 
-  const rootFolders = visibleFolders.filter(
-    (folder) => folder.parentId === null,
-  );
-  const rootDocuments = visibleDocuments.filter(
-    (document) => document.folderId === null,
-  );
+  const rootFolders = visibleFolders.filter((folder) => folder.parentId === null);
+  const rootDocuments = visibleDocuments.filter((document) => document.folderId === null);
+  const statusTitle = !session
+    ? '尚未登录云同步'
+    : encryptionState === 'checking'
+      ? '正在检查加密状态'
+      : encryptionUnlocked
+        ? '端到端加密云同步已开启'
+        : '云同步待解锁';
 
   return (
     <aside
-      className={`${styles.sidebar} ${
-        sidebarCollapsed ? styles.sidebarCollapsed : ''
-      }`}
+      className={`${styles.sidebar} ${sidebarCollapsed ? styles.sidebarCollapsed : ''}`}
       style={{
         width: sidebarCollapsed ? 56 : sidebarWidth,
         minWidth: sidebarCollapsed ? 56 : sidebarWidth,
@@ -347,60 +249,28 @@ export function WorkspaceSidebar({
     >
       <div className={styles.brand}>
         {sidebarCollapsed ? (
-          <button
-            className={styles.brandMark}
-            title="展开侧边栏"
-            onClick={() => setSidebarCollapsed(false)}
-          >
-            D
-          </button>
+          <button className={styles.brandMark} title="展开侧边栏" onClick={() => setSidebarCollapsed(false)}>D</button>
         ) : (
           <>
-            <div className={styles.brandText}>
-              <strong>Drawnix</strong>
-              <span>Workspace</span>
-            </div>
-            <button
-              className={styles.panelButton}
-              title="收起侧边栏"
-              onClick={() => setSidebarCollapsed(true)}
-            >
-              <Icon name="panel-close" />
-            </button>
+            <div className={styles.brandText}><strong>Drawnix</strong><span>Workspace</span></div>
+            <button className={styles.panelButton} title="收起侧边栏" onClick={() => setSidebarCollapsed(true)}><Icon name="panel-close" /></button>
           </>
         )}
       </div>
 
       {sidebarCollapsed ? (
         <div className={styles.collapsedActions}>
-          <button title="新建图表" onClick={() => onCreateDocument(null)}>
-            <Icon name="diagram-plus" />
-          </button>
-          <button title="新建文件夹" onClick={() => onCreateFolder(null)}>
-            <Icon name="folder-plus" />
-          </button>
-          <button title="展开侧边栏" onClick={() => setSidebarCollapsed(false)}>
-            <Icon name="panel-open" />
-          </button>
+          <button title="新建图表" onClick={() => onCreateDocument(null)}><Icon name="diagram-plus" /></button>
+          <button title="新建文件夹" onClick={() => onCreateFolder(null)}><Icon name="folder-plus" /></button>
+          <button title="展开侧边栏" onClick={() => setSidebarCollapsed(false)}><Icon name="panel-open" /></button>
         </div>
       ) : (
         <>
           <div className={styles.primaryActions}>
-            <button onClick={() => onCreateDocument(null)}>
-              <Icon name="diagram-plus" />
-              <span>新建图表</span>
-            </button>
-            <button onClick={() => onCreateFolder(null)}>
-              <Icon name="folder-plus" />
-              <span>新建文件夹</span>
-            </button>
+            <button onClick={() => onCreateDocument(null)}><Icon name="diagram-plus" /><span>新建图表</span></button>
+            <button onClick={() => onCreateFolder(null)}><Icon name="folder-plus" /><span>新建文件夹</span></button>
           </div>
-
-          <div className={styles.treeHeader}>
-            <span>我的图表</span>
-            <span className={styles.treeCount}>{visibleDocuments.length}</span>
-          </div>
-
+          <div className={styles.treeHeader}><span>我的图表</span><span className={styles.treeCount}>{visibleDocuments.length}</span></div>
           <div className={styles.tree}>
             {rootFolders.map(renderFolder)}
             {rootDocuments.map(renderDocument)}
@@ -411,41 +281,36 @@ export function WorkspaceSidebar({
         </>
       )}
 
-      <div
-        className={`${styles.account} ${
-          sidebarCollapsed ? styles.accountCollapsed : ''
-        }`}
-      >
+      <div className={`${styles.account} ${sidebarCollapsed ? styles.accountCollapsed : ''}`}>
         {sidebarCollapsed ? (
           <span
-            className={session ? styles.onlineDot : styles.offlineDot}
-            title={session ? '云同步已开启' : '尚未登录云同步'}
+            className={session && encryptionUnlocked ? styles.onlineDot : styles.offlineDot}
+            title={statusTitle}
           />
         ) : !cloudConfigured ? (
-          <>
-            <strong>仅本地保存</strong>
-            <span>配置 Supabase 后可自动同步</span>
-          </>
+          <><strong>仅本地保存</strong><span>配置 Supabase 后可自动同步</span></>
         ) : session ? (
           <>
             <div className={styles.accountStatus}>
-              <span className={styles.onlineDot} />
+              <span className={encryptionUnlocked ? styles.onlineDot : styles.offlineDot} />
               <div>
-                <strong>{cloudBusy ? '正在同步…' : '云同步已开启'}</strong>
+                <strong>
+                  {encryptionState === 'checking'
+                    ? '检查加密状态…'
+                    : encryptionUnlocked
+                      ? cloudBusy ? '正在加密同步…' : '加密云同步已开启'
+                      : '云同步待解锁'}
+                </strong>
                 <span>{session.user.email ?? session.user.id}</span>
               </div>
             </div>
-            <button className={styles.subtleButton} onClick={onSignOut}>
-              退出登录
-            </button>
+            <button className={styles.subtleButton} onClick={onSignOut}>退出登录</button>
           </>
         ) : (
           <>
-            <strong>云同步</strong>
-            <span>登录后在不同设备间同步文件夹和图表</span>
-            <button className={styles.loginButton} onClick={onSignIn}>
-              使用 GitHub 登录
-            </button>
+            <strong>加密云同步</strong>
+            <span>登录后，图表会在浏览器加密再上传</span>
+            <button className={styles.loginButton} onClick={onSignIn}>使用 GitHub 登录</button>
           </>
         )}
       </div>
