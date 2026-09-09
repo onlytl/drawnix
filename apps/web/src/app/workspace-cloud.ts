@@ -1,8 +1,28 @@
 import type {
+  AppValue,
   CloudSession,
+  EncryptionState,
   WorkspaceDocument,
   WorkspaceFolder,
 } from './workspace-types';
+import {
+  decryptJson,
+  decryptText,
+  encryptJson,
+  encryptText,
+  fingerprintRawMasterKey,
+  forgetRememberedMasterKey,
+  generateMasterKeyMaterial,
+  importMasterKey,
+  isEncryptedJson,
+  isEncryptedText,
+  loadRememberedMasterKey,
+  parseRecoveryKey,
+  rememberMasterKey,
+  unwrapMasterKeyWithPassword,
+  wrapMasterKeyWithPassword,
+  type PasswordWrappedKey,
+} from './workspace-crypto';
 
 const supabaseUrl = (
   import.meta.env.VITE_SUPABASE_URL as string | undefined
@@ -11,10 +31,19 @@ const supabasePublishableKey = import.meta.env
   .VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
 
 const SESSION_KEY = 'drawnix_supabase_session_v1';
+let cloudMasterKey: CryptoKey | null = null;
 
 export const isCloudConfigured = Boolean(
   supabaseUrl && supabasePublishableKey,
 );
+
+export function isCloudEncryptionUnlocked() {
+  return cloudMasterKey !== null;
+}
+
+export function lockCloudEncryption() {
+  cloudMasterKey = null;
+}
 
 type FolderRow = {
   id: string;
@@ -31,11 +60,23 @@ type DocumentRow = {
   id: string;
   folder_id: string | null;
   name: string;
-  content: WorkspaceDocument['content'];
+  content: unknown;
   revision: number;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+};
+
+type CryptoMetadataRow = {
+  user_id: string;
+  version: number;
+  kdf_salt: string;
+  kdf_iterations: number;
+  wrap_iv: string;
+  wrapped_key: string;
+  key_fingerprint: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 function requireConfiguration() {
@@ -45,6 +86,13 @@ function requireConfiguration() {
     );
   }
   return { url: supabaseUrl, key: supabasePublishableKey };
+}
+
+function requireCloudEncryptionKey() {
+  if (!cloudMasterKey) {
+    throw new Error('云同步加密密钥尚未解锁');
+  }
+  return cloudMasterKey;
 }
 
 function decodeJwtPayload(token: string): Record<string, unknown> {
@@ -147,6 +195,7 @@ export async function signOut() {
   const session = readStoredSession();
   if (!session || !isCloudConfigured) {
     saveSession(null);
+    lockCloudEncryption();
     return;
   }
 
@@ -161,6 +210,7 @@ export async function signOut() {
     });
   } finally {
     saveSession(null);
+    lockCloudEncryption();
   }
 }
 
@@ -230,31 +280,182 @@ async function restRequest<T>(
   return (text ? JSON.parse(text) : undefined) as T;
 }
 
-const mapFolder = (row: FolderRow): WorkspaceFolder => ({
-  id: row.id,
-  parentId: row.parent_id,
-  name: row.name,
-  sortOrder: row.sort_order,
-  revision: row.revision,
-  syncedRevision: row.revision,
-  syncState: 'synced',
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
-  deletedAt: row.deleted_at,
-});
+async function getCryptoMetadata() {
+  const rows = await restRequest<CryptoMetadataRow[]>(
+    'user_crypto?select=user_id,version,kdf_salt,kdf_iterations,wrap_iv,wrapped_key,key_fingerprint,created_at,updated_at&limit=1',
+  );
+  return rows[0] ?? null;
+}
 
-const mapDocument = (row: DocumentRow): WorkspaceDocument => ({
-  id: row.id,
-  folderId: row.folder_id,
-  name: row.name,
-  content: row.content,
-  revision: row.revision,
-  syncedRevision: row.revision,
-  syncState: 'synced',
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
-  deletedAt: row.deleted_at,
-});
+function metadataToWrappedKey(row: CryptoMetadataRow): PasswordWrappedKey {
+  return {
+    salt: row.kdf_salt,
+    iterations: row.kdf_iterations,
+    iv: row.wrap_iv,
+    wrappedKey: row.wrapped_key,
+    fingerprint: row.key_fingerprint ?? '',
+  };
+}
+
+export async function initializeCloudEncryption(
+  userId: string,
+): Promise<EncryptionState> {
+  cloudMasterKey = null;
+  const metadata = await getCryptoMetadata();
+  if (!metadata) {
+    return 'setup-required';
+  }
+
+  const remembered = await loadRememberedMasterKey(userId);
+  if (!remembered) {
+    return 'locked';
+  }
+
+  const fingerprint = await fingerprintRawMasterKey(remembered);
+  if (!metadata.key_fingerprint || fingerprint !== metadata.key_fingerprint) {
+    await forgetRememberedMasterKey(userId);
+    return 'locked';
+  }
+
+  cloudMasterKey = await importMasterKey(remembered);
+  return 'unlocked';
+}
+
+export async function setupCloudEncryption(userId: string, password: string) {
+  if (password.length < 8) {
+    throw new Error('同步密码至少需要 8 个字符');
+  }
+
+  const material = await generateMasterKeyMaterial();
+  const wrapped = await wrapMasterKeyWithPassword(material.rawKey, password);
+  const now = new Date().toISOString();
+
+  await restRequest<CryptoMetadataRow[]>('user_crypto?on_conflict=user_id', {
+    method: 'POST',
+    headers: {
+      Prefer: 'resolution=merge-duplicates,return=representation',
+    },
+    body: JSON.stringify({
+      user_id: userId,
+      version: 1,
+      kdf_salt: wrapped.salt,
+      kdf_iterations: wrapped.iterations,
+      wrap_iv: wrapped.iv,
+      wrapped_key: wrapped.wrappedKey,
+      key_fingerprint: wrapped.fingerprint,
+      updated_at: now,
+    }),
+  });
+
+  cloudMasterKey = material.key;
+  await rememberMasterKey(userId, material.rawKey);
+  return material.recoveryKey;
+}
+
+export async function unlockCloudEncryption(userId: string, password: string) {
+  const metadata = await getCryptoMetadata();
+  if (!metadata) {
+    throw new Error('当前账号还没有设置同步加密');
+  }
+
+  let rawKey: Uint8Array;
+  try {
+    rawKey = await unwrapMasterKeyWithPassword(
+      password,
+      metadataToWrappedKey(metadata),
+    );
+  } catch {
+    throw new Error('同步密码不正确');
+  }
+
+  const fingerprint = await fingerprintRawMasterKey(rawKey);
+  if (!metadata.key_fingerprint || fingerprint !== metadata.key_fingerprint) {
+    throw new Error('同步密码不正确');
+  }
+
+  cloudMasterKey = await importMasterKey(rawKey);
+  await rememberMasterKey(userId, rawKey);
+}
+
+export async function recoverCloudEncryption(
+  userId: string,
+  recoveryKey: string,
+  newPassword: string,
+) {
+  if (newPassword.length < 8) {
+    throw new Error('新的同步密码至少需要 8 个字符');
+  }
+
+  const metadata = await getCryptoMetadata();
+  if (!metadata) {
+    throw new Error('当前账号还没有设置同步加密');
+  }
+
+  const rawKey = parseRecoveryKey(recoveryKey);
+  const fingerprint = await fingerprintRawMasterKey(rawKey);
+  if (!metadata.key_fingerprint || fingerprint !== metadata.key_fingerprint) {
+    throw new Error('恢复密钥不正确');
+  }
+
+  const wrapped = await wrapMasterKeyWithPassword(rawKey, newPassword);
+  await restRequest<CryptoMetadataRow[]>(
+    `user_crypto?user_id=eq.${encodeURIComponent(userId)}`,
+    {
+      method: 'PATCH',
+      headers: { Prefer: 'return=representation' },
+      body: JSON.stringify({
+        kdf_salt: wrapped.salt,
+        kdf_iterations: wrapped.iterations,
+        wrap_iv: wrapped.iv,
+        wrapped_key: wrapped.wrappedKey,
+        key_fingerprint: wrapped.fingerprint,
+        updated_at: new Date().toISOString(),
+      }),
+    },
+  );
+
+  cloudMasterKey = await importMasterKey(rawKey);
+  await rememberMasterKey(userId, rawKey);
+}
+
+async function mapFolder(row: FolderRow): Promise<WorkspaceFolder> {
+  const key = requireCloudEncryptionKey();
+  const encryptedName = isEncryptedText(row.name);
+  return {
+    id: row.id,
+    parentId: row.parent_id,
+    name: encryptedName ? await decryptText(key, row.name) : row.name,
+    sortOrder: row.sort_order,
+    revision: row.revision,
+    syncedRevision: row.revision,
+    syncState: 'synced',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    deletedAt: row.deleted_at,
+    needsEncryption: !encryptedName,
+  };
+}
+
+async function mapDocument(row: DocumentRow): Promise<WorkspaceDocument> {
+  const key = requireCloudEncryptionKey();
+  const encryptedName = isEncryptedText(row.name);
+  const encryptedContent = isEncryptedJson(row.content);
+  return {
+    id: row.id,
+    folderId: row.folder_id,
+    name: encryptedName ? await decryptText(key, row.name) : row.name,
+    content: encryptedContent
+      ? await decryptJson<AppValue>(key, row.content)
+      : (row.content as AppValue),
+    revision: row.revision,
+    syncedRevision: row.revision,
+    syncState: 'synced',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    deletedAt: row.deleted_at,
+    needsEncryption: !encryptedName || !encryptedContent,
+  };
+}
 
 const timeValue = (value: string) => {
   const parsed = Date.parse(value);
@@ -279,7 +480,8 @@ export async function pullWorkspace(): Promise<{
   folders: WorkspaceFolder[];
   documents: WorkspaceDocument[];
 }> {
-  const [folders, documents] = await Promise.all([
+  requireCloudEncryptionKey();
+  const [folderRows, documentRows] = await Promise.all([
     restRequest<FolderRow[]>(
       'folders?select=id,parent_id,name,sort_order,revision,created_at,updated_at,deleted_at&order=sort_order.asc,created_at.asc',
     ),
@@ -288,10 +490,12 @@ export async function pullWorkspace(): Promise<{
     ),
   ]);
 
-  return {
-    folders: folders.map(mapFolder),
-    documents: documents.map(mapDocument),
-  };
+  const [folders, documents] = await Promise.all([
+    Promise.all(folderRows.map(mapFolder)),
+    Promise.all(documentRows.map(mapDocument)),
+  ]);
+
+  return { folders, documents };
 }
 
 export async function syncFolder(
@@ -300,6 +504,8 @@ export async function syncFolder(
   | { status: 'synced'; revision: number }
   | { status: 'conflict'; remote: WorkspaceFolder }
 > {
+  const key = requireCloudEncryptionKey();
+  const encryptedName = await encryptText(key, folder.name);
   let existing = await getFolderRow(folder.id);
 
   if (!existing) {
@@ -311,7 +517,7 @@ export async function syncFolder(
       body: JSON.stringify({
         id: folder.id,
         parent_id: folder.parentId,
-        name: folder.name,
+        name: encryptedName,
         sort_order: folder.sortOrder,
         revision: 1,
         created_at: folder.createdAt,
@@ -333,7 +539,7 @@ export async function syncFolder(
   const localTime = timeValue(folder.updatedAt);
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    const remote = mapFolder(existing);
+    const remote = await mapFolder(existing);
     const remoteTime = timeValue(remote.updatedAt);
 
     if (remote.revision > folder.syncedRevision && remoteTime > localTime) {
@@ -348,7 +554,7 @@ export async function syncFolder(
         headers: { Prefer: 'return=representation' },
         body: JSON.stringify({
           parent_id: folder.parentId,
-          name: folder.name,
+          name: encryptedName,
           sort_order: folder.sortOrder,
           revision: nextRevision,
           updated_at: folder.updatedAt,
@@ -364,7 +570,7 @@ export async function syncFolder(
     const latest = await getFolderRow(folder.id);
     if (!latest) throw new Error('Folder disappeared while syncing');
 
-    const latestRemote = mapFolder(latest);
+    const latestRemote = await mapFolder(latest);
     if (timeValue(latestRemote.updatedAt) > localTime) {
       return { status: 'conflict', remote: latestRemote };
     }
@@ -374,7 +580,7 @@ export async function syncFolder(
 
   const latest = await getFolderRow(folder.id);
   if (!latest) throw new Error('Folder disappeared while syncing');
-  return { status: 'conflict', remote: mapFolder(latest) };
+  return { status: 'conflict', remote: await mapFolder(latest) };
 }
 
 export async function syncDocument(
@@ -383,6 +589,11 @@ export async function syncDocument(
   | { status: 'synced'; revision: number }
   | { status: 'conflict'; remote: WorkspaceDocument }
 > {
+  const key = requireCloudEncryptionKey();
+  const [encryptedName, encryptedContent] = await Promise.all([
+    encryptText(key, document.name),
+    encryptJson(key, document.content),
+  ]);
   let existing = await getDocumentRow(document.id);
 
   if (!existing) {
@@ -396,8 +607,8 @@ export async function syncDocument(
         body: JSON.stringify({
           id: document.id,
           folder_id: document.folderId,
-          name: document.name,
-          content: document.content,
+          name: encryptedName,
+          content: encryptedContent,
           revision: 1,
           created_at: document.createdAt,
           updated_at: document.updatedAt,
@@ -419,7 +630,7 @@ export async function syncDocument(
   const localTime = timeValue(document.updatedAt);
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    const remote = mapDocument(existing);
+    const remote = await mapDocument(existing);
     const remoteTime = timeValue(remote.updatedAt);
 
     if (remote.revision > document.syncedRevision && remoteTime > localTime) {
@@ -434,8 +645,8 @@ export async function syncDocument(
         headers: { Prefer: 'return=representation' },
         body: JSON.stringify({
           folder_id: document.folderId,
-          name: document.name,
-          content: document.content,
+          name: encryptedName,
+          content: encryptedContent,
           revision: nextRevision,
           updated_at: document.updatedAt,
           deleted_at: document.deletedAt ?? null,
@@ -450,7 +661,7 @@ export async function syncDocument(
     const latest = await getDocumentRow(document.id);
     if (!latest) throw new Error('Document disappeared while syncing');
 
-    const latestRemote = mapDocument(latest);
+    const latestRemote = await mapDocument(latest);
     if (timeValue(latestRemote.updatedAt) > localTime) {
       return { status: 'conflict', remote: latestRemote };
     }
@@ -460,5 +671,5 @@ export async function syncDocument(
 
   const latest = await getDocumentRow(document.id);
   if (!latest) throw new Error('Document disappeared while syncing');
-  return { status: 'conflict', remote: mapDocument(latest) };
+  return { status: 'conflict', remote: await mapDocument(latest) };
 }
