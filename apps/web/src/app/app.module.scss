@@ -6,16 +6,19 @@
 }
 
 .sidebar {
-  width: 268px;
-  min-width: 268px;
+  position: relative;
+  z-index: 20;
   height: 100%;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  padding: 14px 10px 10px;
-  border-right: 1px solid rgba(0, 0, 0, 0.08);
-  background: rgba(250, 250, 251, 0.97);
-  color: #242426;
+  padding: 12px 10px 10px;
+  border-right: 1px solid #e3e4e7;
+  background: rgba(250, 250, 251, 0.98);
+  color: #27272a;
+  transition:
+    width 160ms ease,
+    min-width 160ms ease;
   font:
     13px/1.4 Inter,
     ui-sans-serif,
@@ -26,167 +29,354 @@
     sans-serif;
 }
 
-.brand {
-  padding: 6px 8px 14px;
+.sidebarCollapsed {
+  padding: 10px 7px;
+  align-items: center;
+}
 
-  div {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-  }
+.brand {
+  min-height: 34px;
+  padding: 2px 4px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.brandText {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
 
   strong {
     font-size: 17px;
-    letter-spacing: -0.02em;
+    line-height: 1;
+    letter-spacing: -0.025em;
   }
 
   span {
     font-size: 11px;
-    color: #8b8b90;
+    color: #929298;
+  }
+}
+
+.brandMark,
+.panelButton,
+.collapsedActions button {
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: #67676d;
+  cursor: pointer;
+}
+
+.brandMark {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: #242426;
+  color: white;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.panelButton {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 7px;
+
+  &:hover {
+    background: #ededf0;
+    color: #242426;
   }
 }
 
 .primaryActions {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  margin-bottom: 12px;
+  gap: 7px;
+  margin: 2px 0 14px;
 
   button {
-    border: 1px solid rgba(0, 0, 0, 0.08);
+    min-width: 0;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border: 1px solid #dedfe3;
     background: #fff;
     border-radius: 8px;
-    padding: 7px 8px;
-    color: #343438;
+    padding: 0 8px;
+    color: #3e3e43;
     cursor: pointer;
     font-size: 12px;
+    transition:
+      background 120ms ease,
+      border-color 120ms ease,
+      box-shadow 120ms ease;
+
+    span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
 
     &:hover {
-      background: #f1f1f3;
+      border-color: #cfd0d5;
+      background: #f7f7f8;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
     }
   }
 }
 
+.collapsedActions {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding-top: 4px;
+
+  button {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+
+    &:hover {
+      background: #ededf0;
+      color: #242426;
+    }
+  }
+}
+
+.treeHeader {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 7px;
+  color: #8b8b91;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.treeCount {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #ededf0;
+  color: #77777d;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 600;
+}
+
 .tree {
   flex: 1;
+  min-height: 0;
   overflow: auto;
-  padding-right: 2px;
+  padding: 2px 1px 8px;
+  scrollbar-width: thin;
+  scrollbar-color: #d6d6da transparent;
+}
+
+.folderNode {
+  min-width: 0;
 }
 
 .folderRow,
 .documentRow {
-  min-height: 30px;
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   border-radius: 7px;
-}
-
-.folderRow {
-  padding-right: 3px;
-  font-weight: 560;
+  color: #3f3f44;
+  transition: background 100ms ease;
 
   &:hover {
-    background: rgba(0, 0, 0, 0.04);
+    background: #f0f0f2;
   }
 }
 
+.folderRow {
+  padding: 0 4px 0 2px;
+  font-weight: 560;
+}
+
 .folderChildren {
-  box-sizing: border-box;
+  position: relative;
+  margin-left: 15px;
+  padding-left: 10px;
+  border-left: 1px solid #e1e2e5;
 }
 
 .folderToggle {
-  width: 18px;
-  height: 24px;
+  width: 24px;
+  height: 28px;
+  flex: 0 0 24px;
+  display: grid;
+  place-items: center;
   padding: 0;
   border: 0;
+  border-radius: 5px;
   background: transparent;
-  color: #85858a;
+  color: #98989e;
   cursor: pointer;
+
+  svg {
+    transition: transform 130ms ease;
+  }
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.04);
+    color: #55555a;
+  }
+}
+
+.folderToggleOpen svg {
+  transform: rotate(90deg);
 }
 
 .folderIcon,
-.fileIcon {
-  width: 18px;
-  color: #8c8c92;
-  flex: 0 0 18px;
+.diagramIcon {
+  width: 20px;
+  height: 28px;
+  flex: 0 0 20px;
+  display: grid;
+  place-items: center;
+}
+
+.folderIcon {
+  color: #b7862d;
+}
+
+.diagramIcon {
+  color: #64748b;
+}
+
+.treeSpacer {
+  width: 24px;
+  height: 28px;
+  flex: 0 0 24px;
 }
 
 .itemName {
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
+  padding-left: 3px;
 }
 
 .documentButton {
   min-width: 0;
-  height: 30px;
+  height: 32px;
   flex: 1;
   display: flex;
   align-items: center;
+  gap: 1px;
   border: 0;
   background: transparent;
   cursor: pointer;
   text-align: left;
   color: inherit;
-  padding: 0 6px;
+  padding: 0;
 }
 
-.active {
-  background: #e9e9ec;
+.documentRow.active {
+  background: #e7ebf1;
+  box-shadow: inset 3px 0 0 #7a8798;
+  color: #252a31;
+
+  &:hover {
+    background: #e3e8ef;
+  }
+
+  .diagramIcon {
+    color: #52667e;
+  }
 }
 
 .rowActions {
-  display: none;
+  height: 28px;
+  display: flex;
   align-items: center;
   gap: 1px;
-  padding-right: 3px;
+  padding-right: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 100ms ease;
 
   button {
-    width: 22px;
-    height: 22px;
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    padding: 0;
     border: 0;
     border-radius: 5px;
     background: transparent;
-    color: #8a8a8f;
+    color: #77777d;
     cursor: pointer;
 
     &:hover {
       background: rgba(0, 0, 0, 0.07);
-      color: #333;
+      color: #29292d;
     }
   }
 }
 
 .folderRow:hover .rowActions,
-.documentRow:hover .rowActions {
-  display: flex;
+.documentRow:hover .rowActions,
+.folderRow:focus-within .rowActions,
+.documentRow:focus-within .rowActions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .syncDot {
   width: 6px;
   height: 6px;
+  flex: 0 0 6px;
   border-radius: 999px;
-  margin-left: 6px;
+  margin: 0 6px 0 5px;
   background: #b5b5ba;
 }
 
 .syncSynced {
-  background: #37a169;
+  background: #39a66b;
 }
 
 .syncPending,
 .syncSyncing {
-  background: #d99526;
+  background: #d99a2b;
 }
 
 .syncConflict {
   background: #d85b57;
 }
 
+.emptyTree {
+  padding: 20px 12px;
+  color: #9a9aa0;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
 .account {
-  border-top: 1px solid rgba(0, 0, 0, 0.07);
-  padding: 12px 6px 2px;
+  border-top: 1px solid #e3e4e7;
+  padding: 11px 6px 2px;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -195,6 +385,13 @@
     color: #85858b;
     font-size: 11px;
   }
+}
+
+.accountCollapsed {
+  width: 100%;
+  margin-top: auto;
+  padding: 13px 0 5px;
+  align-items: center;
 }
 
 .accountStatus {
@@ -208,19 +405,33 @@
     flex-direction: column;
   }
 
+  strong {
+    font-size: 12px;
+  }
+
   span {
     overflow: hidden;
     text-overflow: ellipsis;
     color: #85858b;
     font-size: 11px;
+    white-space: nowrap;
   }
 }
 
-.onlineDot {
+.onlineDot,
+.offlineDot {
   width: 8px;
   height: 8px;
+  flex: 0 0 8px;
   border-radius: 50%;
-  background: #37a169;
+}
+
+.onlineDot {
+  background: #39a66b;
+}
+
+.offlineDot {
+  background: #aaaab0;
 }
 
 .loginButton,
@@ -228,6 +439,7 @@
   border-radius: 7px;
   padding: 7px 9px;
   cursor: pointer;
+  font-size: 12px;
 }
 
 .loginButton {
@@ -237,9 +449,38 @@
 }
 
 .subtleButton {
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border: 1px solid #dedfe3;
   background: #fff;
-  color: #555;
+  color: #55555a;
+
+  &:hover {
+    background: #f5f5f6;
+  }
+}
+
+.resizeHandle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  z-index: 30;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 2px;
+    width: 2px;
+    background: transparent;
+    transition: background 120ms ease;
+  }
+
+  &:hover::after {
+    background: #b9bec7;
+  }
 }
 
 .canvas {
@@ -249,6 +490,10 @@
   height: 100%;
   overflow: hidden;
   background: white;
+}
+
+.canvas :global(.drawnix-tutorial) {
+  display: none !important;
 }
 
 .emptyState {
@@ -370,8 +615,8 @@
 }
 
 @media (max-width: 800px) {
-  .sidebar {
-    width: 220px;
-    min-width: 220px;
+  .sidebar:not(.sidebarCollapsed) {
+    width: 240px !important;
+    min-width: 240px !important;
   }
 }
