@@ -793,7 +793,7 @@ export function App() {
               onToolStateChange={(toolState) => {
                 void localforage.setItem(MAIN_BOARD_TOOL_STATE_KEY, toolState);
               }}
-              tutorial={activeDocument.content.children.length === 0}
+              tutorial={false}
               afterInit={(_board) => {
                 console.log('board initialized');
               }}
