@@ -19,9 +19,19 @@ Root directory: (留空)
 ```
 
 在 **Environment variables** 部分添加：
+
 ```
-NODE_VERSION = 20
+NODE_VERSION = 22
 ```
+
+若要开启加密云同步，再加入：
+
+```
+VITE_SUPABASE_URL
+VITE_SUPABASE_PUBLISHABLE_KEY
+```
+
+不要放入 `service_role` 或 `sb_secret_` 密钥。完整步骤见 [docs/CLOUD_SYNC_SETUP.md](./docs/CLOUD_SYNC_SETUP.md)。
 
 ### 4. 点击 "Save and Deploy"
 就这么简单！

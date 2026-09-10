@@ -11,7 +11,7 @@
     开源白板工具，一体化支持思维导图、流程图、自由画等
   </h2>
   <p>
-    在原版 Drawnix 基础上增加了 <strong>多图管理、文件夹、个人云同步、离线优先和 Vercel + Supabase 自部署</strong>。
+    在原版 Drawnix 基础上增加了 <strong>多图工作区、文件夹、回收站、端到端加密云同步、离线优先和 Vercel + Supabase 自部署</strong>。
   </p>
   <p>
     <a href="https://drawnix-lac.vercel.app/" target="_blank"><strong>在线体验：https://drawnix-lac.vercel.app/</strong></a>
@@ -33,7 +33,7 @@
 
 > 本仓库是基于 [plait-board/drawnix](https://github.com/plait-board/drawnix) 的增强版 Fork。核心画板、Plait 插件体系和原有绘图能力均来自上游 Drawnix，本 Fork 主要增加个人工作区与云同步相关能力。
 
-[*English README (upstream)*](https://github.com/plait-board/drawnix/blob/develop/README_en.md)
+[*English README*](./README_en.md)
 
 ## 本 Fork 新增功能
 
@@ -41,18 +41,34 @@
 
 - 📁 **多图表工作区**：不再只有一个浏览器本地画板，可以创建和管理多张图。
 - 🗂️ **文件夹与子文件夹**：支持树形目录组织图表，适合长期积累架构图、流程图和思维导图。
-- 🌳 **Workspace 文件树**：文件夹和图表使用不同图标、清晰层级和选中状态，并支持折叠。
+- 🌳 **Workspace 文件树**：文件夹和图表使用不同图标、清晰层级和选中状态，并支持折叠、搜索、右键菜单。
+- 🎨 **侧栏跟随画板主题**：切换默认 / 柔和 / 复古 / 暗夜 / 星空时，左侧工作区一起变色。
 - ↔️ **可调整侧栏**：侧栏支持收起和拖动调整宽度。
+- 🔗 **图表深链接**：当前图对应地址栏 `#d=<id>`，刷新、收藏和浏览器后退会回到同一张图。
+- 🗑️ **回收站与撤销删除**：删除先进入回收站，底部可立即撤销；也可稍后恢复或彻底删除。
+- 🌐 **工作区多语言**：侧栏、弹窗和加密流程跟随画板语言（中 / 英 / 俄 / 阿 / 越）。
 - 💾 **Local-first 本地优先**：编辑内容第一时间写入浏览器 IndexedDB/localForage，不依赖网络才能画图。
 - ☁️ **Supabase 云同步**：登录后将文件夹和图表自动同步到 Supabase PostgreSQL。
+- 🔒 **端到端加密**：图表名称和内容在浏览器里用 AES-256-GCM 加密后再上传，服务器只保存密文。
+- 🔑 **同步密码与恢复密钥**：主密钥由同步密码包裹；首次开启加密时会显示一次恢复密钥，请自行保存。
 - 🔐 **GitHub OAuth 登录**：GitHub 只用于身份认证，实际图表数据存储在 Supabase。
-- 🔄 **多设备同步**：同一 GitHub 账号在不同设备登录后，可以读取同一个工作区。
+- 🔄 **多设备同步**：同一 GitHub 账号在不同设备登录后，解锁加密即可读取同一个工作区。
 - 📴 **离线编辑**：网络不可用时继续编辑，恢复网络后自动同步。
 - 🛡️ **RLS 数据隔离**：Supabase Row Level Security 确保每个用户只能访问自己的数据。
 - 🧩 **版本 / 冲突保护**：通过 revision 进行乐观并发控制，仅在确实存在较新的远端修改时提示冲突。
-- 🗑️ **Soft Delete**：删除记录会同步删除状态，避免其他设备重新拉回已经删除的数据。
 - ♻️ **旧数据自动迁移**：原 Drawnix 的 `main_board_content` 会自动迁移成新的工作区图表。
 - ▲ **Vercel 部署配置**：仓库已包含 `vercel.json`，可以直接部署 Vite/Nx Web App。
+
+## 工作区怎么用
+
+- **新建图表 / 文件夹**：左侧按钮，或文件夹菜单里的「在此新建」。
+- **重命名**：双击名称、按 <kbd>F2</kbd>，或打开行内菜单。弹窗与加密密码框是同一套。
+- **删除**：先进入回收站，几秒内可点底部「撤销」。侧栏垃圾桶图标打开回收站，可恢复或彻底删除。
+- **打开某张图**：地址会变成 `https://你的域名/#d=<图表id>`，把这个链接收藏或发给自己即可回到该图。
+- **云同步**：配置 Supabase 后，用 GitHub 登录，设置同步密码。可以稍后设置，先继续用本地。
+- **换设备**：登录同一 GitHub 账号，输入同步密码解锁。若忘记密码，用首次保存的恢复密钥设置新密码。
+
+更完整的自托管步骤见 [docs/CLOUD_SYNC_SETUP.md](./docs/CLOUD_SYNC_SETUP.md)。
 
 ## 原版 Drawnix 特性
 
@@ -101,7 +117,7 @@ Vercel
   │
   └── Supabase
        ├── Auth                 GitHub 登录
-       └── PostgreSQL           folders / documents
+       └── PostgreSQL           folders / documents / user_crypto（密文）
 ```
 
 需要：
@@ -134,7 +150,7 @@ npm install
 npm run start
 ```
 
-Web 默认由 Nx/Vite 启动。
+Web 默认由 Nx/Vite 启动，地址是 [http://localhost:7200/](http://localhost:7200/)。
 
 ## 2. 创建 Supabase 项目
 
@@ -151,6 +167,7 @@ supabase/schema.sql
 ```text
 folders
 documents
+user_crypto
 ```
 
 以及对应的：
@@ -289,8 +306,7 @@ Redirect URLs 可以加入：
 
 ```text
 https://draw.example.com/**
-http://localhost:4200/**
-http://localhost:5173/**
+http://localhost:7200/**
 ```
 
 如果需要支持 Vercel Preview，也可以添加对应的 Preview URL 通配规则。
@@ -350,11 +366,11 @@ develop
 部署完成后：
 
 1. 打开网站并使用 GitHub 登录。
-2. 创建文件夹。
-3. 创建一张图并编辑内容。
-4. 等待后台自动同步。
-5. 刷新页面确认内容仍存在。
-6. 在另一个浏览器或另一台设备登录同一 GitHub 账号。
+2. 设置同步密码，并保存只显示一次的恢复密钥。
+3. 创建文件夹和一张图，编辑内容。
+4. 等待侧栏显示已同步。
+5. 刷新页面，确认仍打开同一张图（地址栏带 `#d=`）。
+6. 在另一个浏览器或另一台设备登录同一 GitHub 账号，输入同步密码解锁。
 7. 确认能够读取同一套文件夹和图表。
 
 正常结构：
@@ -386,6 +402,15 @@ Supabase
  ↓
 自动同步到 Supabase
 ```
+
+## 关于加密
+
+图表名称和内容在浏览器里加密后再上传。Supabase 只保存密文和包裹后的主密钥，看不到明文。
+
+- 同步密码不会上传。
+- 首次开启加密时会显示一次恢复密钥，请保存到密码管理器。
+- 忘记密码且没有恢复密钥时，云端数据无法解密。
+- 本地 IndexedDB 仍是明文，这是 local-first 的取舍：离线可画，但这台设备失守等于本地数据可读。
 
 ## 关于同步冲突
 
@@ -436,7 +461,7 @@ drawnix/
 ├── supabase/
 │   └── schema.sql                 # 云同步数据库 Schema / RLS
 ├── docs/
-│   └── CLOUD_SYNC_SETUP.md        # 云同步配置说明
+│   └── CLOUD_SYNC_SETUP.md        # 云同步与加密配置说明
 ├── vercel.json                    # Vercel 构建配置
 ├── .env.example                   # Supabase 环境变量示例
 ├── package.json
